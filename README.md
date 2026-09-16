@@ -64,16 +64,57 @@ To put it on your phone: push this repo and enable **GitHub Pages** (Settings �
 Pages → deploy from branch, root folder). Open the Pages URL in Chrome and use
 "Add to Home screen". It then works offline and launches like a native app.
 
-## Your data
+## Privacy and durability
 
-Stored in IndexedDB on the device that created it. Not synced, not backed up, not
-sent anywhere. Consequences worth knowing:
+These pull against each other: private means nobody can read it, durable means
+copies exist in places you don't fully control. Encrypting on the device
+resolves it — the ciphertext can then be scattered anywhere.
 
-- Clearing browser data for this site **erases everything**.
-- Use ⚙ → **Export JSON** regularly. Import merges by default, so an export is a
-  real backup and also the way to move to a new phone.
-- Private/incognito windows may block storage entirely; the app will say so
-  rather than pretending to save.
+### Encryption
+
+⚙ → Security → set a passphrase. What happens:
+
+- A random 256-bit AES-GCM master key encrypts every record individually.
+- That master key is stored twice over: wrapped by a key derived from your
+  passphrase, and wrapped by a key derived from a one-time **recovery key**.
+  Changing your passphrase rewraps one small blob rather than re-encrypting
+  everything, and forgetting it is survivable.
+- Key derivation is PBKDF2-SHA256 at 600,000 iterations. Argon2id resists GPU
+  cracking better, but every implementation is a WASM blob fetched from a CDN,
+  and this app's strongest property is that it makes **zero outbound requests**.
+  Passphrase length closes that gap far more effectively than the KDF choice.
+- The master key exists only in memory, only while unlocked. It is never written
+  to storage in usable form.
+- Locks on reload, on ⚙ → Security → Lock now, and automatically after five
+  minutes in the background.
+
+On disk, an encrypted record is `{ id, enc: { iv, ct } }` and nothing else. No
+searchable text, no entity names, no dates.
+
+There is no reset. Forget the passphrase *and* lose the recovery key and the
+file is unreadable by anyone, permanently.
+
+### Backups
+
+⚙ → Backup gives you two formats:
+
+- **Sealed (`.spyw`)** — ciphertext plus the wrapped keys needed to open it.
+  Safe in Google Drive, in email, on a USB stick, committed to a public repo.
+  Opens with the passphrase *or* recovery key that were in force when it was
+  written, so an old backup still opens after you change your passphrase.
+- **Plain JSON** — readable by anything, protected by nothing. For when you want
+  to process the data elsewhere.
+
+Restoring merges rather than overwrites, so pulling in an old backup never
+destroys newer work. The app nags you on the Brief once a backup is a week old.
+
+### What the threat model does and doesn't cover
+
+Covered: a lost or stolen phone, a shared or repaired device, cloud storage
+being breached, the hosting provider, anyone who opens the app's URL.
+
+Not covered: malware with a keylogger on an unlocked phone, someone watching you
+type, or coercion. Encryption at rest doesn't help against any of those.
 
 ## Files
 
@@ -81,6 +122,7 @@ sent anywhere. Consequences worth knowing:
 index.html            app shell
 styles.css            all styling
 js/db.js              IndexedDB wrapper
+js/crypto.js          the vault: key wrapping, AES-GCM records, recovery keys
 js/model.js           data model, entity parsing, brief and link derivation
 js/ui.js              views and event wiring
 js/app.js             boot, service worker registration

@@ -101,7 +101,7 @@ body {
 h2 { font-size: 15px; margin: 0 0 10px; letter-spacing: 0.03em; text-transform: uppercase; color: var(--muted); }
 h3 { font-size: 15px; margin: 0 0 6px; }
 
-textarea, input[type=text], input[type=date], input[type=search], select {
+textarea, input[type=text], input[type=password], input[type=date], input[type=search], select {
   width: 100%;
   background: var(--surface);
   color: var(--text);
@@ -292,3 +292,7 @@ details.more[open] > summary::before { content: "▾ "; }
 @media (min-width: 640px) {
   .stats { grid-template-columns: repeat(6, 1fr); }
 }
+
+/* Locked: nothing to navigate to until the file is open. */
+body.locked .tabbar { display: none; }
+body.locked #btn-data { display: none; }

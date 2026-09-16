@@ -1,6 +1,9 @@
-// Data model, entity parsing and the derived views (links, streak, brief).
+// Data model, entity parsing, the derived views (links, streak, brief), and the
+// encryption boundary. Records leave this module as plain objects and hit the
+// database as ciphertext whenever a vault exists.
 
 import * as db from './db.js';
+import * as C from './crypto.js';
 
 export const DOMAINS = [
   { id: 'political', label: 'Political' },
@@ -34,15 +37,98 @@ export const CREDIBILITY = {
   6: 'Cannot be judged',
 };
 
+const STORES = ['observations', 'entities', 'questions'];
+
 export const state = { observations: [], entities: [], questions: [] };
+
+// The master key exists only here, only in memory, only while unlocked.
+let masterKey = null;
+let vault = null;
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const normKey = name => name.trim().toLowerCase().replace(/\s+/g, ' ');
 
+/* ---------------- encryption boundary ---------------- */
+
+export const isEncrypted = () => !!vault;
+export const isLocked = () => !!vault && !masterKey;
+
+async function persist(store, obj) {
+  if (masterKey) return db.put(store, { id: obj.id, enc: await C.encryptJson(masterKey, obj) });
+  return db.put(store, obj);
+}
+
+async function readAll(store) {
+  const rows = await db.getAll(store);
+  const out = [];
+  for (const row of rows) {
+    if (!row.enc) { out.push(row); continue; }
+    if (!masterKey) throw new Error('locked');
+    out.push(await C.decryptJson(masterKey, row.enc));
+  }
+  return out;
+}
+
+// Rewrites every record under the current key setting. Used when turning
+// encryption on or off; both directions are a full pass over the data.
+async function rewriteAll() {
+  const snapshot = { observations: state.observations, entities: state.entities, questions: state.questions };
+  for (const store of STORES) {
+    await db.clear(store);
+    for (const row of snapshot[store]) await persist(store, row);
+  }
+}
+
+export async function init() {
+  vault = (await db.get('vault', 'vault')) || null;
+  if (!vault) await load();
+}
+
+export async function unlock(passphrase) {
+  masterKey = await C.unlockWithPassphrase(vault, passphrase);
+  await load();
+}
+
+export async function unlockWithRecoveryKey(recoveryKey) {
+  masterKey = await C.unlockWithRecoveryKey(vault, recoveryKey);
+  await load();
+}
+
+export function lock() {
+  masterKey = null;
+  state.observations = [];
+  state.entities = [];
+  state.questions = [];
+}
+
+export async function enableEncryption(passphrase) {
+  if (vault) throw new Error('Already encrypted.');
+  const created = await C.createVault(passphrase);
+  masterKey = created.key;
+  vault = created.vault;
+  await rewriteAll();
+  await db.put('vault', vault);
+  return created.recoveryKey;
+}
+
+export async function changePassphrase(current, next) {
+  await C.unlockWithPassphrase(vault, current); // throws if wrong
+  vault = await C.rewrapPassphrase(vault, masterKey, next);
+  await db.put('vault', vault);
+}
+
+export async function disableEncryption(passphrase) {
+  await C.unlockWithPassphrase(vault, passphrase); // throws if wrong
+  masterKey = null;
+  vault = null;
+  await rewriteAll();
+  await db.del('vault', 'vault');
+}
+
+/* ---------------- loading ---------------- */
+
 export async function load() {
-  const [observations, entities, questions] = await Promise.all([
-    db.getAll('observations'), db.getAll('entities'), db.getAll('questions'),
-  ]);
+  const [observations, entities, questions] = await Promise.all(STORES.map(readAll));
   state.observations = observations.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   state.entities = entities;
   state.questions = questions.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -79,7 +165,7 @@ async function ensureEntities(names) {
     let entity = findEntityByName(name);
     if (!entity) {
       entity = { id: uid(), name: name.trim(), key: normKey(name), type: 'unknown', aliases: [], notes: '', createdAt: new Date().toISOString() };
-      await db.put('entities', entity);
+      await persist('entities', entity);
       state.entities.push(entity);
     }
     if (!ids.includes(entity.id)) ids.push(entity.id);
@@ -89,7 +175,7 @@ async function ensureEntities(names) {
 
 export async function saveEntity(entity) {
   entity.key = normKey(entity.name);
-  await db.put('entities', entity);
+  await persist('entities', entity);
   const i = state.entities.findIndex(e => e.id === entity.id);
   if (i >= 0) state.entities[i] = entity; else state.entities.push(entity);
   return entity;
@@ -101,7 +187,7 @@ export async function deleteEntity(id) {
   for (const o of state.observations) {
     if (o.entityIds.includes(id)) {
       o.entityIds = o.entityIds.filter(x => x !== id);
-      await db.put('observations', o);
+      await persist('observations', o);
     }
   }
 }
@@ -129,7 +215,7 @@ export async function saveObservation(draft) {
     entityIds,
   };
 
-  await db.put('observations', obs);
+  await persist('observations', obs);
   const i = state.observations.findIndex(o => o.id === obs.id);
   if (i >= 0) state.observations[i] = obs; else state.observations.unshift(obs);
   state.observations.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -154,7 +240,7 @@ export async function saveQuestion(q) {
     createdAt: q.createdAt || new Date().toISOString(),
     answeredAt: q.answeredAt || null,
   };
-  await db.put('questions', question);
+  await persist('questions', question);
   const i = state.questions.findIndex(x => x.id === question.id);
   if (i >= 0) state.questions[i] = question; else state.questions.unshift(question);
   return question;
@@ -250,9 +336,29 @@ export function brief(days = 7) {
   };
 }
 
+/* ---------------- backup bookkeeping ---------------- */
+
+const BACKUP_KEY = 'spy-work:last-backup';
+
+export function lastBackupAt() {
+  try { return localStorage.getItem(BACKUP_KEY); } catch { return null; }
+}
+
+export function daysSinceBackup() {
+  const at = lastBackupAt();
+  if (!at) return null;
+  return Math.floor((Date.now() - new Date(at)) / 86400000);
+}
+
+function markBackedUp() {
+  try { localStorage.setItem(BACKUP_KEY, new Date().toISOString()); } catch {}
+}
+
 /* ---------------- import / export ---------------- */
 
-export function exportPayload() {
+// Plaintext. Readable by anything, protected by nothing.
+export function exportPlain() {
+  markBackedUp();
   return {
     format: 'spy-work',
     version: 1,
@@ -263,32 +369,66 @@ export function exportPayload() {
   };
 }
 
+// Ciphertext plus the wrapped keys needed to open it. Safe to put anywhere:
+// cloud storage, email, a public repo. Opens with the passphrase or the
+// recovery key that were in force when it was written.
+export async function exportEncrypted() {
+  if (!masterKey) throw new Error('Encryption is off — nothing to export as a sealed file.');
+  const records = {};
+  for (const store of STORES) {
+    records[store] = [];
+    for (const row of state[store]) {
+      records[store].push({ id: row.id, enc: await C.encryptJson(masterKey, row) });
+    }
+  }
+  markBackedUp();
+  return { format: 'spy-work-encrypted', version: 1, exportedAt: new Date().toISOString(), vault, records };
+}
+
+// Turns an encrypted export back into plain records, without touching this
+// device's own vault. The file carries its own wrapped key, so an old backup
+// opens with the passphrase it was written under.
+export async function decryptExport(payload, secret, { recovery = false } = {}) {
+  if (payload.format !== 'spy-work-encrypted') throw new Error('Not a sealed Spy Work file.');
+  const key = recovery
+    ? await C.unlockWithRecoveryKey(payload.vault, secret)
+    : await C.unlockWithPassphrase(payload.vault, secret);
+
+  const out = { format: 'spy-work', version: 1 };
+  for (const store of STORES) {
+    out[store] = [];
+    for (const row of payload.records[store] || []) out[store].push(await C.decryptJson(key, row.enc));
+  }
+  return out;
+}
+
 export async function importPayload(payload, { replace = false } = {}) {
   if (!payload || payload.format !== 'spy-work') throw new Error('Not a Spy Work export file.');
 
   if (replace) {
-    await Promise.all([db.clear('observations'), db.clear('entities'), db.clear('questions')]);
+    await Promise.all(STORES.map(s => db.clear(s)));
     state.observations = []; state.entities = []; state.questions = [];
   }
 
-  const existing = new Set(state.observations.map(o => o.id));
-  const entityKeys = new Set(state.entities.map(e => e.key));
-  const questionIds = new Set(state.questions.map(q => q.id));
+  const seenObs = new Set(state.observations.map(o => o.id));
+  const seenEntityKeys = new Set(state.entities.map(e => e.key));
+  const seenQuestions = new Set(state.questions.map(q => q.id));
 
-  const entities = (payload.entities || []).filter(e => replace || !entityKeys.has(e.key));
-  const observations = (payload.observations || []).filter(o => replace || !existing.has(o.id));
-  const questions = (payload.questions || []).filter(q => replace || !questionIds.has(q.id));
+  const incoming = {
+    entities: (payload.entities || []).filter(e => !seenEntityKeys.has(e.key)),
+    observations: (payload.observations || []).filter(o => !seenObs.has(o.id)),
+    questions: (payload.questions || []).filter(q => !seenQuestions.has(q.id)),
+  };
 
-  await Promise.all([
-    db.putMany('entities', entities),
-    db.putMany('observations', observations),
-    db.putMany('questions', questions),
-  ]);
+  for (const store of STORES) {
+    for (const row of incoming[store]) await persist(store, row);
+  }
+
   await load();
-  return { observations: observations.length, entities: entities.length, questions: questions.length };
+  return { observations: incoming.observations.length, entities: incoming.entities.length, questions: incoming.questions.length };
 }
 
 export async function wipe() {
-  await Promise.all([db.clear('observations'), db.clear('entities'), db.clear('questions')]);
+  await Promise.all(STORES.map(s => db.clear(s)));
   await load();
 }

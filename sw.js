@@ -1,8 +1,8 @@
 // Offline shell. Bump CACHE when shipping changes so clients pick them up.
-const CACHE = 'spy-work-v1';
+const CACHE = 'spy-work-v2';
 const SHELL = [
   './', './index.html', './styles.css', './manifest.webmanifest',
-  './js/app.js', './js/ui.js', './js/model.js', './js/db.js',
+  './js/app.js', './js/ui.js', './js/model.js', './js/db.js', './js/crypto.js',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png',
 ];
 
