@@ -108,6 +108,16 @@ file is unreadable by anyone, permanently.
 Restoring merges rather than overwrites, so pulling in an old backup never
 destroys newer work. The app nags you on the Brief once a backup is a week old.
 
+### Keeping the device copy from being evicted
+
+On first run the app calls `navigator.storage.persist()`, asking the browser not
+to clear this origin when the device runs low on space. Chrome typically grants
+it once the app is installed to the home screen; until then storage is
+"best-effort" and can be reclaimed. ⚙ → Backup shows which state you're in.
+
+This does not protect against you clearing site data by hand, or uninstalling.
+Nothing on one device does. That is what backups are for.
+
 ### What the threat model does and doesn't cover
 
 Covered: a lost or stolen phone, a shared or repaired device, cloud storage

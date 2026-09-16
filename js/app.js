@@ -14,6 +14,15 @@ async function boot() {
   if (M.isLocked()) render();
   else go(M.state.observations.length ? 'brief' : 'capture');
 
+  // Ask the browser not to evict this origin when the device runs low on space.
+  // Chrome grants it for installed PWAs; without it, storage is "best-effort"
+  // and can be cleared to reclaim disk.
+  if (navigator.storage?.persist) {
+    try {
+      if (!(await navigator.storage.persisted())) await navigator.storage.persist();
+    } catch {}
+  }
+
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }

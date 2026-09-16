@@ -581,6 +581,9 @@ export function openData() {
     <div id="import-unlock"></div>
 
     <div class="spacer"></div>
+    <div id="storage-status" class="tiny muted"></div>
+
+    <div class="spacer"></div>
     <button class="ghost" id="open-security" style="width:100%">Security…</button>
     <div class="spacer"></div>
     <button class="ghost" id="do-wipe" style="width:100%;color:var(--bad)">Erase all data on this device</button>
@@ -623,6 +626,7 @@ export function openData() {
     }
   });
 
+  showStorageStatus();
   document.getElementById('open-security').addEventListener('click', openSecurity);
 
   document.getElementById('do-wipe').addEventListener('click', async () => {
@@ -632,6 +636,20 @@ export function openData() {
     render();
     toast('Erased.');
   });
+}
+
+// Whether the browser has promised not to evict this origin. "Best-effort" means
+// it can be cleared to reclaim disk; installing to the home screen usually flips it.
+async function showStorageStatus() {
+  const el = document.getElementById('storage-status');
+  if (!el || !navigator.storage?.persisted) return;
+  try {
+    const durable = await navigator.storage.persisted();
+    const { usage } = (await navigator.storage.estimate?.()) || {};
+    el.innerHTML = `Storage: <strong style="color:var(--${durable ? 'good' : 'warn'})">${durable ? 'persistent' : 'best-effort'}</strong>` +
+      `${usage ? ` · ${(usage / 1024).toFixed(0)} KB used` : ''}` +
+      `${durable ? '' : ' — install to the home screen to make it persistent.'}`;
+  } catch {}
 }
 
 function renderImportUnlock(error = '', recovery = false) {
