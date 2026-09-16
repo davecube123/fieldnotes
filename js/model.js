@@ -350,17 +350,31 @@ export function observationsFor(entityId) {
 // A question is a living document: the thing you want to know, plus the answer
 // you build up over time, plus the observations that back it. "How does a land
 // lease work here" is not one fact, it is a standing brief that keeps growing.
+export const LEAD_STATES = ['open', 'checked out', 'dead end'];
+
 export async function saveQuestion(q) {
   const existing = state.questions.find(x => x.id === q.id);
   const text = (q.text ?? existing?.text ?? '').trim();
   const answer = (q.answer ?? existing?.answer ?? '').trim();
   const now = new Date().toISOString();
 
+  // Loose ends: half-facts, hearsay and things to check, before any of it is
+  // solid enough to write into the answer.
+  const leads = (q.leads ?? existing?.leads ?? [])
+    .map(l => ({
+      id: l.id || uid(),
+      text: (l.text || '').trim(),
+      status: LEAD_STATES.includes(l.status) ? l.status : 'open',
+      createdAt: l.createdAt || now,
+    }))
+    .filter(l => l.text);
+
   const question = {
     id: q.id || uid(),
     text,
     answer,
-    entityIds: await ensureEntities(parseMentions(`${text} ${answer}`)),
+    leads,
+    entityIds: await ensureEntities(parseMentions(`${text} ${answer} ${leads.map(l => l.text).join(' ')}`)),
     createdAt: q.createdAt || existing?.createdAt || now,
     updatedAt: now,
     answeredAt: q.answeredAt !== undefined ? q.answeredAt : (existing?.answeredAt || null),
@@ -523,6 +537,8 @@ export function brief(days = 7) {
       .slice(0, 8),
     followUps: state.observations.filter(o => o.followUp),
     openQuestions: state.questions.filter(q => !q.answeredAt),
+    openLeads: state.questions.flatMap(q =>
+      (q.leads || []).filter(l => l.status === 'open').map(l => ({ question: q, lead: l }))),
     answeredRecently: state.questions.filter(q => q.answeredAt && q.answeredAt >= since),
     newRelations: state.relations.filter(r => r.createdAt >= since && r.type !== 'may_be'),
     subjects: subjects().map(e => ({
@@ -537,7 +553,13 @@ export function brief(days = 7) {
 
 /* ---------------- backup bookkeeping ---------------- */
 
-const BACKUP_KEY = 'spy-work:last-backup';
+const BACKUP_KEY = 'fieldnotes:last-backup';
+
+// Backups written before the rename still carry the old tag, so both are read.
+const FORMAT = 'fieldnotes';
+const SEALED_FORMAT = 'fieldnotes-encrypted';
+const PLAIN_FORMATS = [FORMAT, 'spy-work'];
+const SEALED_FORMATS = [SEALED_FORMAT, 'spy-work-encrypted'];
 
 export function lastBackupAt() {
   try { return localStorage.getItem(BACKUP_KEY); } catch { return null; }
@@ -559,7 +581,7 @@ function markBackedUp() {
 export function exportPlain() {
   markBackedUp();
   return {
-    format: 'spy-work',
+    format: FORMAT,
     version: 1,
     exportedAt: new Date().toISOString(),
     observations: state.observations,
@@ -582,19 +604,19 @@ export async function exportEncrypted() {
     }
   }
   markBackedUp();
-  return { format: 'spy-work-encrypted', version: 1, exportedAt: new Date().toISOString(), vault, records };
+  return { format: SEALED_FORMAT, version: 1, exportedAt: new Date().toISOString(), vault, records };
 }
 
 // Turns an encrypted export back into plain records, without touching this
 // device's own vault. The file carries its own wrapped key, so an old backup
 // opens with the passphrase it was written under.
 export async function decryptExport(payload, secret, { recovery = false } = {}) {
-  if (payload.format !== 'spy-work-encrypted') throw new Error('Not a sealed Spy Work file.');
+  if (!SEALED_FORMATS.includes(payload.format)) throw new Error('Not a sealed Fieldnotes file.');
   const key = recovery
     ? await C.unlockWithRecoveryKey(payload.vault, secret)
     : await C.unlockWithPassphrase(payload.vault, secret);
 
-  const out = { format: 'spy-work', version: 1 };
+  const out = { format: FORMAT, version: 1 };
   for (const store of STORES) {
     out[store] = [];
     for (const row of payload.records[store] || []) out[store].push(await C.decryptJson(key, row.enc));
@@ -603,7 +625,7 @@ export async function decryptExport(payload, secret, { recovery = false } = {}) 
 }
 
 export async function importPayload(payload, { replace = false } = {}) {
-  if (!payload || payload.format !== 'spy-work') throw new Error('Not a Spy Work export file.');
+  if (!payload || !PLAIN_FORMATS.includes(payload.format)) throw new Error('Not a Fieldnotes export file.');
 
   if (replace) {
     await Promise.all(STORES.map(s => db.clear(s)));

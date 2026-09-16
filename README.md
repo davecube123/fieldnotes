@@ -1,8 +1,8 @@
-# Spy Work
+# Fieldnotes
 
-A private field notebook for building a picture of the things you care about —
-politics, economics, prices, processes and people — and for surfacing the
-connections between them.
+A private notebook for keeping track of what you learn — people, organisations,
+prices, processes and how they fit together — and for surfacing connections you
+would otherwise not notice.
 
 Phone-first, offline, installable. Everything is stored on your device; nothing
 is uploaded anywhere.
@@ -27,8 +27,9 @@ non-obvious, and relevant to a decision does. Three design consequences:
 - **Observation ≠ assessment.** The fact goes in one field, what you think it
   means in another. This is the single cheapest upgrade to your own thinking:
   six months later you will not mistake your guess for something you were told.
-- **Grade the source and the claim separately.** The admiralty scale — source
-  reliability A–F, claim credibility 1–6. A reliable source can still hand you
+- **Grade the source and the claim separately.** Source reliability A–F, claim
+  credibility 1–6 — the scale used in analytic work precisely because the two
+  come apart. A reliable source can still hand you
   an improbable claim, and collapsing the two into one "trust" score is how
   people end up certain about nothing.
 - **Entities are the spine.** Tag anything with `@[Maria Santos]` or `@BSP`.
@@ -61,7 +62,10 @@ non-obvious, and relevant to a decision does. Three design consequences:
   name as an alias, and drops every rejected candidate rather than migrating
   them onto a real person.
 - **Standing questions beat aimless collecting.** Keep a list of what you want
-  to know. You notice answers when you are already looking for them.
+  to know. You notice answers when you are already looking for them. Each
+  question also carries **leads** — hearsay, half-facts and things to check —
+  kept separate from the answer until they are solid, and tapped through
+  open → checked out → dead end as you work them.
 - **Some answers are documents, not facts.** How a land lease works, how a fee
   gets processed, who really signs off — these are not one observation, they are
   a brief you accumulate. Each question holds its own answer text, tags the
@@ -74,7 +78,7 @@ non-obvious, and relevant to a decision does. Three design consequences:
 | **Capture** | File an observation in seconds. Domain, entities, optional grading. |
 | **Feed** | Everything filed, searchable, filterable by domain. Edit or delete. |
 | **Entities** | Every person, org, place, thing and process, ranked by how often they come up. Filter to the unidentified to see open subjects. Open one to get the file on them: standing details, the domains they span, their recorded connections and who those reach in two hops, who they're seen alongside, the questions they turn up in, and every observation mentioning them. |
-| **Questions** | Standing questions, each holding the answer you build up over time. "How does a land lease work here" starts empty and grows into a written brief, with the observations that back it attached as evidence. |
+| **Questions** | Standing questions, each holding the answer you build up over time, plus a list of leads — half-facts and things to check, before any of it is solid enough to write down as an answer. "How does a land lease work here" starts empty and grows into a written brief, with the observations that back it attached as evidence. |
 | **Brief** | The weekly payoff: what you filed, where you looked, who crossed domains, what's new, what's unanswered, what's unsourced. Copy it as text. |
 
 ## Running it
@@ -93,18 +97,17 @@ Pages → deploy from branch, root folder). Open the Pages URL in Chrome and use
 
 ## Scope
 
-This is a tool for working out how things and institutions actually operate, and
-who is behind them: an establishment's real owner, a shell company's principals,
-an anonymous account making public claims, who really signs off on a permit.
+This is a tool for understanding how things and institutions actually work, and
+who stands behind them: a business's real owner, a company's principals, an
+account making public claims, who actually signs off on a permit.
 
-It is not built for, and should not be used for, unmasking a private individual
-who is anonymous for their own protection. The app cannot tell the two cases
-apart. You can.
+It is not for identifying a private individual who is anonymous for their own
+protection. The software cannot tell those two cases apart. The person using it
+can.
 
-Whatever the case, the error that does the damage is not failing to identify
-someone — it is confidently identifying the wrong person. That is why every
-candidate carries what would disprove it, and why the app refuses to close a
-subject without a written reason.
+Either way, the error that does harm is not failing to identify someone — it is
+confidently identifying the wrong person. That is why every candidate records
+what would disprove it, and why closing a subject requires a written reason.
 
 ## Privacy and durability
 
@@ -140,7 +143,7 @@ file is unreadable by anyone, permanently.
 
 ⚙ → Backup gives you two formats:
 
-- **Sealed (`.spyw`)** — ciphertext plus the wrapped keys needed to open it.
+- **Sealed (`.fnotes`)** — ciphertext plus the wrapped keys needed to open it.
   Safe in Google Drive, in email, on a USB stick, committed to a public repo.
   Opens with the passphrase *or* recovery key that were in force when it was
   written, so an old backup still opens after you change your passphrase.

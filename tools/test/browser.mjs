@@ -319,6 +319,42 @@ await session('Questions as answer documents', async page => {
   check('linked observation attaches as evidence',
     (await page.locator('#sheet-content').textContent()).includes('Evidence · 1'));
 
+  // leads: half-facts you want recorded before they are solid
+  await page.fill('#lead-text', 'heard the fee is 2% — @[Maria Santos] would know');
+  await page.click('#lead-add');
+  await page.waitForTimeout(400);
+  check('a lead is recorded against the question',
+    (await page.locator('#sheet-content').textContent()).includes('heard the fee is 2%'));
+  check('a new lead starts open',
+    (await page.locator('#sheet-content [data-leadcycle]').first().textContent()).trim() === 'open');
+  check('a lead pulls its mentions into entities',
+    await page.evaluate(() => window.spy.model.state.entities.some(e => e.name === 'Maria Santos')));
+
+  await page.locator('#sheet-content [data-leadcycle]').first().click();
+  await page.waitForTimeout(400);
+  check('tapping moves the lead along',
+    (await page.locator('#sheet-content [data-leadcycle]').first().textContent()).trim() === 'checked out');
+
+  await page.fill('#lead-text', 'ask the treasurer who signs the release');
+  await page.click('#lead-add');
+  await page.waitForTimeout(400);
+  await page.click('#sheet-close');
+  await page.click('.tab[data-view=brief]');
+  await page.waitForTimeout(250);
+  const brief = await page.locator('#view').textContent();
+  check('brief lists only leads still open',
+    brief.includes('Leads to chase · 1') && brief.includes('ask the treasurer'));
+
+  await page.click('.tab[data-view=questions]');
+  check('the question row shows outstanding leads',
+    (await page.locator('#view').textContent()).includes('1 open leads'));
+  await page.locator('[data-question]').first().click();
+  await page.waitForTimeout(250);
+  await page.locator('#sheet-content [data-leaddel]').first().click();
+  await page.waitForTimeout(400);
+  check('a lead can be dropped',
+    await page.evaluate(() => window.spy.model.state.questions[0].leads.length) === 1);
+
   await page.click('[data-answer]');
   await page.waitForTimeout(250);
   check('settling moves it out of open', (await page.locator('#view').textContent()).includes('Settled · 1'));
@@ -349,7 +385,7 @@ await session('Encryption, locking and sealed backups', async page => {
   await page.waitForTimeout(400);
 
   const raw = await page.evaluate(() => new Promise(resolve => {
-    const req = indexedDB.open('spy-work');
+    const req = indexedDB.open('fieldnotes');
     req.onsuccess = () => {
       const tx = req.result.transaction(['observations', 'entities'], 'readonly');
       const rows = [];
@@ -360,7 +396,7 @@ await session('Encryption, locking and sealed backups', async page => {
   }));
   check('no plaintext left on disk', !raw.includes('CANARYTOKEN99') && !raw.includes('Maria Santos'));
   check('relations are encrypted too', await page.evaluate(() => new Promise(resolve => {
-    const req = indexedDB.open('spy-work');
+    const req = indexedDB.open('fieldnotes');
     req.onsuccess = () => {
       req.result.transaction('relations', 'readonly').objectStore('relations').getAll()
         .onsuccess = e => resolve(e.target.result.length === 1 && !JSON.stringify(e.target.result).includes('CANARYRELATION'));
@@ -402,7 +438,7 @@ await session('Encryption, locking and sealed backups', async page => {
   check('relations survive the round trip',
     await page.evaluate(() => window.spy.model.state.relations[0]?.note === 'CANARYRELATION'));
   check('restored records are re-encrypted', await page.evaluate(() => new Promise(resolve => {
-    const req = indexedDB.open('spy-work');
+    const req = indexedDB.open('fieldnotes');
     req.onsuccess = () => {
       req.result.transaction('observations', 'readonly').objectStore('observations').getAll()
         .onsuccess = e => resolve(!JSON.stringify(e.target.result).includes('CANARYTOKEN99'));

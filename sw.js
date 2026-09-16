@@ -1,5 +1,5 @@
 // Offline shell. Bump CACHE when shipping changes so clients pick them up.
-const CACHE = 'spy-work-v2';
+const CACHE = 'fieldnotes-v1';
 const SHELL = [
   './', './index.html', './styles.css', './manifest.webmanifest',
   './js/app.js', './js/ui.js', './js/model.js', './js/db.js', './js/crypto.js',

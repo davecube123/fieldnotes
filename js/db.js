@@ -1,6 +1,6 @@
 // Thin promise wrapper over IndexedDB. Everything lives on the device.
 
-const DB_NAME = 'spy-work';
+const DB_NAME = 'fieldnotes';
 const DB_VERSION = 3;
 
 let handle = null;

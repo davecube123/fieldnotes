@@ -1,7 +1,7 @@
 {
-  "name": "Spy Work",
-  "short_name": "Spy Work",
-  "description": "Private field notebook: observations, entities and the connections between them.",
+  "name": "Fieldnotes",
+  "short_name": "Fieldnotes",
+  "description": "Notes, people, questions and how they connect.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

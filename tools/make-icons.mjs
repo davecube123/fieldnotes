@@ -5,51 +5,47 @@
 import { deflateSync } from 'node:zlib';
 import { writeFileSync } from 'node:fs';
 
-const BG = [0x0f, 0x11, 0x15];
-const LINE = [0x2b, 0x30, 0x38];
-const ACCENT = [0xd2, 0x79, 0x5a];
-const MUTED = [0x8b, 0x93, 0xa1];
+const BG     = [0x0f, 0x11, 0x15];
+const PAPER  = [0xe6, 0xe8, 0xec];
+const SPINE  = [0xd2, 0x79, 0x5a];
+const RULE   = [0xa8, 0xb0, 0xbc];
 
-const NODES = [
-  { x: 256, y: 150, r: 30, c: ACCENT },
-  { x: 146, y: 300, r: 24, c: ACCENT },
-  { x: 366, y: 300, r: 24, c: ACCENT },
-  { x: 256, y: 300, r: 20, c: ACCENT },
-  { x: 256, y: 378, r: 14, c: MUTED },
+// Painted in order, later shapes over earlier ones. Coordinates are in a
+// 512x512 space and scaled to whatever size is being rendered.
+const SHAPES = [
+  { x: 0,   y: 0,   w: 512, h: 512, r: 96, color: BG },
+  { x: 116, y: 96,  w: 280, h: 320, r: 26, color: PAPER },
+  { x: 116, y: 96,  w: 44,  h: 320, r: 22, color: SPINE },
+  { x: 188, y: 168, w: 164, h: 18,  r: 9,  color: RULE },
+  { x: 188, y: 232, w: 164, h: 18,  r: 9,  color: RULE },
+  { x: 188, y: 296, w: 108, h: 18,  r: 9,  color: RULE },
 ];
-const EDGES = [[0, 1], [0, 2], [1, 2], [0, 3], [3, 4]];
 
-function distToSegment(px, py, a, b) {
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const len2 = dx * dx + dy * dy || 1;
-  const t = Math.max(0, Math.min(1, ((px - a.x) * dx + (py - a.y) * dy) / len2));
-  return Math.hypot(px - (a.x + t * dx), py - (a.y + t * dy));
+// Signed-distance test for a rounded rectangle.
+function inside(px, py, s) {
+  const cx = s.x + s.w / 2;
+  const cy = s.y + s.h / 2;
+  const qx = Math.max(Math.abs(px - cx) - (s.w / 2 - s.r), 0);
+  const qy = Math.max(Math.abs(py - cy) - (s.h / 2 - s.r), 0);
+  return Math.hypot(qx, qy) <= s.r;
 }
 
 function render(size) {
-  const s = size / 512;
+  const scale = size / 512;
   const px = Buffer.alloc(size * size * 4);
-  const radius = 96 * s;
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
-      const cx = (x + 0.5) / s, cy = (y + 0.5) / s;
-      let color = BG, alpha = 255;
+      const cx = (x + 0.5) / scale;
+      const cy = (y + 0.5) / scale;
 
-      // rounded-rectangle mask
-      const qx = Math.max(radius / s - cx, cx - (512 - radius / s), 0);
-      const qy = Math.max(radius / s - cy, cy - (512 - radius / s), 0);
-      if (Math.hypot(qx, qy) > radius / s) alpha = 0;
-
-      for (const [i, j] of EDGES) {
-        if (distToSegment(cx, cy, NODES[i], NODES[j]) <= 5) color = LINE;
-      }
-      for (const n of NODES) {
-        if (Math.hypot(cx - n.x, cy - n.y) <= n.r) color = n.c;
-      }
+      let color = null;
+      for (const shape of SHAPES) if (inside(cx, cy, shape)) color = shape.color;
 
       const o = (y * size + x) * 4;
-      px[o] = color[0]; px[o + 1] = color[1]; px[o + 2] = color[2]; px[o + 3] = alpha;
+      if (color) {
+        px[o] = color[0]; px[o + 1] = color[1]; px[o + 2] = color[2]; px[o + 3] = 255;
+      }
     }
   }
   return px;

@@ -776,6 +776,7 @@ function renderQuestions() {
         <div class="obs-foot">
           ${q.answer ? `<span class="chip" style="color:var(--good)">answered ${q.answer.split(/\s+/).length} words</span>` : '<span class="chip">no answer yet</span>'}
           ${linked ? `<span class="chip">${linked} observation${linked > 1 ? 's' : ''}</span>` : ''}
+          ${(q.leads || []).filter(l => l.status === 'open').length ? `<span class="chip" style="color:var(--warn)">${(q.leads || []).filter(l => l.status === 'open').length} open leads</span>` : ''}
           <span class="chip">${esc(relTime(q.updatedAt || q.createdAt))}</span>
         </div>
       </button>`;
@@ -828,10 +829,54 @@ export function openQuestion(id) {
     </form>
 
     <div class="spacer"></div>
+    <h2>Leads and loose ends</h2>
+    <p class="tiny muted" style="margin-bottom:10px">Half-facts, hearsay and things to check. Tap the tag to move a lead along.</p>
+    <div class="row" style="margin-bottom:12px">
+      <input type="text" id="lead-text" placeholder="heard the fee is 2% — unconfirmed" style="flex:3" autocomplete="off">
+      <button class="ghost" id="lead-add" style="flex:1;width:auto">Add</button>
+    </div>
+    ${(q.leads || []).length ? (q.leads || []).map(l => `
+      <div class="rowitem" style="${l.status === 'dead end' ? 'opacity:0.5' : ''}">
+        <span style="flex:1;min-width:0">${withMentions(l.text)}</span>
+        <button class="chip" data-leadcycle="${l.id}" style="color:var(--${l.status === 'checked out' ? 'good' : l.status === 'dead end' ? 'muted' : 'warn'})">${esc(l.status)}</button>
+        <button class="icon-btn" data-leaddel="${l.id}" aria-label="Remove lead">✕</button>
+      </div>`).join('') : '<p class="muted small">Nothing outstanding.</p>'}
+
+    <div class="spacer"></div>
     <h2>Evidence · ${linked.length}</h2>
     <p class="tiny muted">Observations you filed against this question. Link one by choosing it in Capture.</p>
     <div class="spacer"></div>
     ${linked.map(obsCard).join('') || '<p class="muted small">Nothing linked yet.</p>'}`);
+
+  const addLead = async () => {
+    const input = document.getElementById('lead-text');
+    const text = input.value.trim();
+    if (!text) return;
+    const form = new FormData(document.getElementById('q-edit'));
+    await M.saveQuestion({
+      ...q, text: form.get('text'), answer: form.get('answer'),
+      leads: [...(q.leads || []), { text }],
+    });
+    render();
+    openQuestion(q.id);
+  };
+  document.getElementById('lead-add').addEventListener('click', addLead);
+  document.getElementById('lead-text').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); addLead(); }
+  });
+
+  sheetContent.querySelectorAll('[data-leadcycle], [data-leaddel]').forEach(btn =>
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.leadcycle || btn.dataset.leaddel;
+      const leads = btn.dataset.leaddel
+        ? (q.leads || []).filter(l => l.id !== id)
+        : (q.leads || []).map(l => l.id === id
+            ? { ...l, status: M.LEAD_STATES[(M.LEAD_STATES.indexOf(l.status) + 1) % M.LEAD_STATES.length] }
+            : l);
+      await M.saveQuestion({ ...q, leads });
+      render();
+      openQuestion(q.id);
+    }));
 
   const qForm = document.getElementById('q-edit');
   attachMentionAutocomplete(qForm.elements.answer, qForm.querySelector('[data-suggest-for="answer"]'), () => {});
@@ -928,6 +973,15 @@ function renderBrief() {
       ${b.followUps.slice(0, 5).map(o => `<div class="small" style="margin-top:8px">${esc(o.body.slice(0, 140))}${o.body.length > 140 ? '…' : ''}</div>`).join('')}
     </div>` : ''}
 
+    ${b.openLeads.length ? `<div class="card">
+      <h3>Leads to chase · ${b.openLeads.length}</h3>
+      ${b.openLeads.slice(0, 8).map(({ question, lead }) => `
+        <div class="small" style="margin-top:8px">
+          ${withMentions(lead.text)}
+          <div class="tiny muted">${esc(question.text)}</div>
+        </div>`).join('')}
+    </div>` : ''}
+
     ${b.openQuestions.length ? `<div class="card">
       <h3>Still unanswered</h3>
       ${b.openQuestions.slice(0, 8).map(q => `<div class="small" style="margin-top:8px"><button class="chip entity" data-question="${q.id}" style="white-space:normal;text-align:left">${esc(q.text)}</button></div>`).join('')}
@@ -1022,7 +1076,7 @@ export function openData() {
     <div class="spacer"></div>
     <label class="field">
       <span class="lab">Restore from a backup (merges; nothing is overwritten)</span>
-      <input type="file" id="do-import" accept=".json,.spyw,application/json">
+      <input type="file" id="do-import" accept=".json,.fnotes,.spyw,application/json">
     </label>
     <div id="import-unlock"></div>
 
@@ -1047,13 +1101,13 @@ export function openData() {
 
   const sealed = document.getElementById('do-export-sealed');
   if (sealed) sealed.addEventListener('click', async () => {
-    download(await M.exportEncrypted(), `spy-work-${today()}.spyw`);
+    download(await M.exportEncrypted(), `fieldnotes-${today()}.fnotes`);
     toast('Sealed backup saved.');
   });
 
   document.getElementById('do-export').addEventListener('click', () => {
     if (M.isEncrypted() && !confirm('This file will be readable by anyone who opens it. Continue?')) return;
-    download(M.exportPlain(), `spy-work-${today()}.json`);
+    download(M.exportPlain(), `fieldnotes-${today()}.json`);
     toast('Exported.');
   });
 
@@ -1062,7 +1116,7 @@ export function openData() {
     if (!file) return;
     try {
       const payload = JSON.parse(await file.text());
-      if (payload.format === 'spy-work-encrypted') {
+      if (String(payload.format).endsWith('-encrypted')) {
         pendingImport = payload;
         return renderImportUnlock();
       }
