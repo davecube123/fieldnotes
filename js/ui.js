@@ -12,6 +12,15 @@ const toastEl = document.getElementById('toast');
 const today = () => new Date().toISOString().slice(0, 10);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+// Renders @[Maria Santos] and @BSP as the plain name, highlighted. The tagging
+// syntax is for typing, not for reading it back.
+const MENTION_RE = /@\[([^\]\n]+)\]|@([\p{L}\p{N}_.\-]+)/gu;
+const withMentions = text => esc(text).replace(MENTION_RE, (_, bracketed, bare) => {
+  if (bracketed) return `<span class="mention">${bracketed}</span>`;
+  const trail = bare.match(/[.\-_]+$/)?.[0] || '';
+  return `<span class="mention">${bare.slice(0, bare.length - trail.length)}</span>${trail}`;
+});
+
 let currentView = 'capture';
 // The domain you filed last is nearly always the one you file next.
 let lastDomain = 'political';
@@ -290,8 +299,8 @@ function obsCard(o) {
         <span class="dom-${o.domain}">${M.DOMAINS.find(d => d.id === o.domain)?.label || o.domain}</span>
         <span>${esc(relTime(o.createdAt))}</span>
       </div>
-      <div class="body">${esc(o.body)}</div>
-      ${o.assessment ? `<div class="assess"><span class="tag">ASSESSMENT</span>${esc(o.assessment)}</div>` : ''}
+      <div class="body">${withMentions(o.body)}</div>
+      ${o.assessment ? `<div class="assess"><span class="tag">ASSESSMENT</span>${withMentions(o.assessment)}</div>` : ''}
       <div class="obs-foot">
         ${chips}
         <span class="chip grade ${gradeClass(o)}">${esc(o.reliability)}${esc(o.credibility)}</span>
@@ -361,6 +370,11 @@ export function openEntity(id) {
     ${p.links.length ? `<div class="chips">${p.links.map(l => `<button class="chip entity" data-entity="${l.entity.id}">${esc(l.entity.name)} ·${l.count}</button>`).join('')}</div>`
                      : '<p class="muted small">Nobody yet. Co-mentions build this.</p>'}
 
+    ${p.questions.length ? `
+    <div class="spacer"></div>
+    <h2>Turns up in ${p.questions.length} question${p.questions.length > 1 ? 's' : ''}</h2>
+    ${p.questions.map(q => `<button class="rowitem" data-question="${q.id}" style="display:block"><strong>${esc(q.text)}</strong></button>`).join('')}` : ''}
+
     <div class="spacer"></div>
     <h2>${p.observations.length} observations</h2>
     ${p.observations.map(obsCard).join('') || '<p class="muted small">None.</p>'}`);
@@ -393,42 +407,81 @@ export function openEntity(id) {
 
 function renderQuestions() {
   const open = M.state.questions.filter(q => !q.answeredAt);
-  const closed = M.state.questions.filter(q => q.answeredAt);
+  const answered = M.state.questions.filter(q => q.answeredAt);
 
   const row = q => {
     const linked = M.state.observations.filter(o => o.questionId === q.id).length;
+    const preview = q.answer ? q.answer.replace(/\s+/g, ' ').slice(0, 110) : '';
     return `
-      <div class="card">
-        <div>${esc(q.text)}</div>
+      <button class="rowitem" data-question="${q.id}" style="display:block">
+        <strong>${esc(q.text)}</strong>
+        ${preview ? `<div class="meta" style="margin-top:6px;white-space:normal">${withMentions(preview)}${q.answer.length > 110 ? '…' : ''}</div>` : ''}
         <div class="obs-foot">
-          <span class="chip">${linked} linked</span>
-          <span class="chip">${esc(relTime(q.createdAt))}</span>
+          ${q.answer ? `<span class="chip" style="color:var(--good)">answered ${q.answer.split(/\s+/).length} words</span>` : '<span class="chip">no answer yet</span>'}
+          ${linked ? `<span class="chip">${linked} observation${linked > 1 ? 's' : ''}</span>` : ''}
+          <span class="chip">${esc(relTime(q.updatedAt || q.createdAt))}</span>
         </div>
-        <div class="actions">
-          <button class="ghost" data-answer="${q.id}">${q.answeredAt ? 'Reopen' : 'Mark answered'}</button>
-          <button class="ghost" data-qdel="${q.id}">Delete</button>
-        </div>
-      </div>`;
+      </button>`;
   };
 
   view.innerHTML = `
-    <form id="q-form" class="row" style="margin-bottom:16px">
-      <input type="text" name="text" placeholder="What do you want to know?" style="flex:3">
+    <form id="q-form" class="row" style="margin-bottom:14px">
+      <input type="text" name="text" placeholder="How does … actually work?" style="flex:3">
       <button class="primary" type="submit" style="flex:1;width:auto">Add</button>
     </form>
-    <p class="tiny muted">Standing questions turn aimless collecting into a search. You notice answers when you are already looking for them.</p>
+    <p class="tiny muted">Each question holds its own answer, written up as you learn it. Standing questions also turn aimless collecting into a search — you notice answers when you are already looking for them.</p>
     <div class="spacer"></div>
     <h2>Open · ${open.length}</h2>
     ${open.map(row).join('') || '<p class="empty">No open questions.</p>'}
-    ${closed.length ? `<div class="spacer"></div><h2>Answered · ${closed.length}</h2>${closed.map(row).join('')}` : ''}`;
+    ${answered.length ? `<div class="spacer"></div><h2>Settled · ${answered.length}</h2>${answered.map(row).join('')}` : ''}`;
 
   document.getElementById('q-form').addEventListener('submit', async e => {
     e.preventDefault();
     const input = e.target.elements.text;
     if (!input.value.trim()) return;
-    await M.saveQuestion({ text: input.value });
+    const q = await M.saveQuestion({ text: input.value });
     render();
-    toast('Question added.');
+    openQuestion(q.id);
+  });
+}
+
+export function openQuestion(id) {
+  const q = M.state.questions.find(x => x.id === id);
+  if (!q) return;
+  const linked = M.state.observations.filter(o => o.questionId === q.id);
+  const entities = (q.entityIds || []).map(M.entityById).filter(Boolean);
+
+  openSheet(q.answeredAt ? 'Settled' : 'Open question', `
+    <form id="q-edit">
+      <label class="field"><span class="lab">The question</span>
+        <input type="text" name="text" value="${esc(q.text)}"></label>
+
+      <label class="field"><span class="lab">What you have worked out so far</span>
+        <textarea name="answer" style="min-height:190px" placeholder="Write it up as you learn it — the steps, who decides what, what it costs, where it stalls.&#10;&#10;Tag the people and offices involved with @[Registry of Deeds].">${esc(q.answer || '')}</textarea></label>
+
+      ${entities.length ? `<div class="chips" style="margin-bottom:12px">${entities.map(e => `<button type="button" class="chip entity" data-entity="${e.id}">${esc(e.name)}</button>`).join('')}</div>` : ''}
+
+      <button class="primary" type="submit">Save</button>
+      <div class="spacer"></div>
+      <div class="row">
+        <button class="ghost" type="button" data-answer="${q.id}">${q.answeredAt ? 'Reopen' : 'Mark settled'}</button>
+        <button class="ghost" type="button" data-qdel="${q.id}">Delete</button>
+      </div>
+    </form>
+
+    <div class="spacer"></div>
+    <h2>Evidence · ${linked.length}</h2>
+    <p class="tiny muted">Observations you filed against this question. Link one by choosing it in Capture.</p>
+    <div class="spacer"></div>
+    ${linked.map(obsCard).join('') || '<p class="muted small">Nothing linked yet.</p>'}`);
+
+  document.getElementById('q-edit').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    await M.saveQuestion({ ...q, text: f.get('text'), answer: f.get('answer') });
+    closeSheet();
+    render();
+    toast('Saved.');
   });
 }
 
@@ -489,7 +542,12 @@ function renderBrief() {
 
     ${b.openQuestions.length ? `<div class="card">
       <h3>Still unanswered</h3>
-      ${b.openQuestions.slice(0, 8).map(q => `<div class="small" style="margin-top:6px">· ${esc(q.text)}</div>`).join('')}
+      ${b.openQuestions.slice(0, 8).map(q => `<div class="small" style="margin-top:8px"><button class="chip entity" data-question="${q.id}" style="white-space:normal;text-align:left">${esc(q.text)}</button></div>`).join('')}
+    </div>` : ''}
+
+    ${b.answeredRecently.length ? `<div class="card">
+      <h3>Settled this week</h3>
+      ${b.answeredRecently.map(q => `<div class="small" style="margin-top:6px">· ${esc(q.text)}</div>`).join('')}
     </div>` : ''}
 
     ${b.unsourced ? `<div class="card"><h3>Hygiene</h3><p class="small muted">${b.unsourced} of this week's observations have no source recorded. In six months you will not remember where they came from.</p></div>` : ''}
@@ -803,6 +861,9 @@ export function wireGlobalEvents() {
     const entity = e.target.closest('[data-entity]');
     if (entity) return openEntity(entity.dataset.entity);
 
+    const question = e.target.closest('[data-question]');
+    if (question) return openQuestion(question.dataset.question);
+
     const open = e.target.closest('[data-open]');
     if (open) return open.dataset.open === 'security' ? openSecurity() : openData();
 
@@ -830,13 +891,15 @@ export function wireGlobalEvents() {
     if (answer) {
       const q = M.state.questions.find(x => x.id === answer.dataset.answer);
       if (q) await M.saveQuestion({ ...q, answeredAt: q.answeredAt ? null : new Date().toISOString() });
+      closeSheet();
       return render();
     }
 
     const qdel = e.target.closest('[data-qdel]');
     if (qdel) {
-      if (!confirm('Delete this question?')) return;
+      if (!confirm('Delete this question and the answer written into it?')) return;
       await M.deleteQuestion(qdel.dataset.qdel);
+      closeSheet();
       return render();
     }
   });

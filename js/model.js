@@ -233,12 +233,23 @@ export function observationsFor(entityId) {
 
 /* ---------------- questions ---------------- */
 
+// A question is a living document: the thing you want to know, plus the answer
+// you build up over time, plus the observations that back it. "How does a land
+// lease work here" is not one fact, it is a standing brief that keeps growing.
 export async function saveQuestion(q) {
+  const existing = state.questions.find(x => x.id === q.id);
+  const text = (q.text ?? existing?.text ?? '').trim();
+  const answer = (q.answer ?? existing?.answer ?? '').trim();
+  const now = new Date().toISOString();
+
   const question = {
     id: q.id || uid(),
-    text: q.text.trim(),
-    createdAt: q.createdAt || new Date().toISOString(),
-    answeredAt: q.answeredAt || null,
+    text,
+    answer,
+    entityIds: await ensureEntities(parseMentions(`${text} ${answer}`)),
+    createdAt: q.createdAt || existing?.createdAt || now,
+    updatedAt: now,
+    answeredAt: q.answeredAt !== undefined ? q.answeredAt : (existing?.answeredAt || null),
   };
   await persist('questions', question);
   const i = state.questions.findIndex(x => x.id === question.id);
@@ -271,6 +282,7 @@ export function entityProfile(entityId) {
   return {
     entity: entityById(entityId),
     observations: obs,
+    questions: state.questions.filter(q => (q.entityIds || []).includes(entityId)),
     domains,
     crossDomain: domains.length >= 2,
     links,
@@ -332,6 +344,7 @@ export function brief(days = 7) {
       .slice(0, 8),
     followUps: state.observations.filter(o => o.followUp),
     openQuestions: state.questions.filter(q => !q.answeredAt),
+    answeredRecently: state.questions.filter(q => q.answeredAt && q.answeredAt >= since),
     unsourced: recent.filter(o => !o.source).length,
   };
 }

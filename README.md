@@ -39,6 +39,10 @@ non-obvious, and relevant to a decision does. Three design consequences:
   a join you would not have noticed by memory.
 - **Standing questions beat aimless collecting.** Keep a list of what you want
   to know. You notice answers when you are already looking for them.
+- **Some answers are documents, not facts.** How a land lease works, how a fee
+  gets processed, who really signs off — these are not one observation, they are
+  a brief you accumulate. Each question holds its own answer text, tags the
+  offices and people involved, and collects supporting observations as evidence.
 
 ## Views
 
@@ -47,7 +51,7 @@ non-obvious, and relevant to a decision does. Three design consequences:
 | **Capture** | File an observation in seconds. Domain, entities, optional grading. |
 | **Feed** | Everything filed, searchable, filterable by domain. Edit or delete. |
 | **Entities** | Every person, org, place, thing and process, ranked by how often they come up. Open one for its profile: domains it spans, who it's seen alongside, every observation mentioning it. |
-| **Questions** | Your open questions. Link observations that answer them. |
+| **Questions** | Standing questions, each holding the answer you build up over time. "How does a land lease work here" starts empty and grows into a written brief, with the observations that back it attached as evidence. |
 | **Brief** | The weekly payoff: what you filed, where you looked, who crossed domains, what's new, what's unanswered, what's unsourced. Copy it as text. |
 
 ## Running it

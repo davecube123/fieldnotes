@@ -151,6 +151,7 @@ button.ghost {
   margin-bottom: 12px;
 }
 
+.mention { color: var(--accent); }
 .muted { color: var(--muted); }
 .small { font-size: 13px; }
 .tiny { font-size: 12px; }
