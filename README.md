@@ -53,6 +53,13 @@ non-obvious, and relevant to a decision does. Three design consequences:
   observations you filed under unrelated domains, the brief flags it. That is
   the honest, useful version of "subtle connections" — no inference magic, just
   a join you would not have noticed by memory.
+- **Someone you cannot name yet is still a file.** Start a subject under a
+  working name — "the page admin", "the man in the grey pickup" — and observations,
+  attributes and links attach to it like any other entity. Candidate identities
+  are recorded with a confidence *and* with what would prove each one wrong;
+  naming a subject requires writing down what convinced you, keeps the working
+  name as an alias, and drops every rejected candidate rather than migrating
+  them onto a real person.
 - **Standing questions beat aimless collecting.** Keep a list of what you want
   to know. You notice answers when you are already looking for them.
 - **Some answers are documents, not facts.** How a land lease works, how a fee
@@ -66,7 +73,7 @@ non-obvious, and relevant to a decision does. Three design consequences:
 |---|---|
 | **Capture** | File an observation in seconds. Domain, entities, optional grading. |
 | **Feed** | Everything filed, searchable, filterable by domain. Edit or delete. |
-| **Entities** | Every person, org, place, thing and process, ranked by how often they come up. Open one to get the file on them: standing details, the domains they span, their recorded connections and who those reach in two hops, who they're seen alongside, the questions they turn up in, and every observation mentioning them. |
+| **Entities** | Every person, org, place, thing and process, ranked by how often they come up. Filter to the unidentified to see open subjects. Open one to get the file on them: standing details, the domains they span, their recorded connections and who those reach in two hops, who they're seen alongside, the questions they turn up in, and every observation mentioning them. |
 | **Questions** | Standing questions, each holding the answer you build up over time. "How does a land lease work here" starts empty and grows into a written brief, with the observations that back it attached as evidence. |
 | **Brief** | The weekly payoff: what you filed, where you looked, who crossed domains, what's new, what's unanswered, what's unsourced. Copy it as text. |
 
@@ -83,6 +90,21 @@ python3 -m http.server 8000
 To put it on your phone: push this repo and enable **GitHub Pages** (Settings →
 Pages → deploy from branch, root folder). Open the Pages URL in Chrome and use
 "Add to Home screen". It then works offline and launches like a native app.
+
+## Scope
+
+This is a tool for working out how things and institutions actually operate, and
+who is behind them: an establishment's real owner, a shell company's principals,
+an anonymous account making public claims, who really signs off on a permit.
+
+It is not built for, and should not be used for, unmasking a private individual
+who is anonymous for their own protection. The app cannot tell the two cases
+apart. You can.
+
+Whatever the case, the error that does the damage is not failing to identify
+someone — it is confidently identifying the wrong person. That is why every
+candidate carries what would disprove it, and why the app refuses to close a
+subject without a written reason.
 
 ## Privacy and durability
 

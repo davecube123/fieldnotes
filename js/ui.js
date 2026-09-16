@@ -28,6 +28,7 @@ let draft = blankDraft();
 let feedQuery = '';
 let feedDomains = new Set();
 let entityQuery = '';
+let entityFilter = 'all';
 let toastTimer = null;
 
 const AUTO_LOCK_MS = 5 * 60 * 1000;
@@ -383,29 +384,95 @@ function obsCard(o) {
 /* ======================= entities ======================= */
 
 function renderEntities() {
-  const index = M.entityIndex().filter(r => !entityQuery || r.entity.name.toLowerCase().includes(entityQuery.toLowerCase()));
+  const all = M.entityIndex();
+  const index = all
+    .filter(r => entityFilter !== 'subjects' || r.entity.provisional)
+    .filter(r => !entityQuery || r.entity.name.toLowerCase().includes(entityQuery.toLowerCase()));
+  const subjectCount = all.filter(r => r.entity.provisional).length;
 
   view.innerHTML = `
     <input type="search" id="ent-q" placeholder="Search entities" value="${esc(entityQuery)}">
     <div class="spacer"></div>
-    <p class="tiny muted">${index.length} entities · ${index.filter(r => r.crossDomain).length} appear in more than one domain</p>
+    <div class="chips" style="margin-bottom:12px">
+      <button class="chip ${entityFilter === 'all' ? 'on' : ''}" data-entfilter="all">Everyone</button>
+      <button class="chip ${entityFilter === 'subjects' ? 'on' : ''}" data-entfilter="subjects">Unidentified · ${subjectCount}</button>
+      <button class="chip entity" id="new-subject">+ Track someone unnamed</button>
+    </div>
+    <p class="tiny muted">${index.length} shown · ${all.filter(r => r.crossDomain).length} appear in more than one domain</p>
     ${index.length ? index.map(r => `
       <button class="rowitem" data-entity="${r.entity.id}">
         <span>
           <strong>${esc(r.entity.name)}</strong>
+          ${r.entity.provisional ? '<span class="chip" style="margin-left:6px;color:var(--warn)">unidentified</span>' : ''}
           ${r.crossDomain ? '<span class="chip cross" style="margin-left:6px">cross-domain</span>' : ''}
           <div class="meta">${r.entity.type !== 'unknown' ? esc(r.entity.type) + ' · ' : ''}${r.domains.map(d => esc(d)).join(', ') || 'no observations'}${(r.entity.attributes || []).length ? ` · ${r.entity.attributes.length} details` : ''}${M.relationsFor(r.entity.id).length ? ` · ${M.relationsFor(r.entity.id).length} links` : ''}</div>
         </span>
         <span class="meta">${r.count}</span>
-      </button>`).join('') : '<p class="empty">Entities appear here once you tag something with @.</p>'}`;
+      </button>`).join('')
+      : `<p class="empty">${entityFilter === 'subjects' ? 'No unidentified subjects.' : 'Entities appear here once you tag something with @.'}</p>`}`;
 
   const q = document.getElementById('ent-q');
   q.addEventListener('input', () => { entityQuery = q.value; renderEntities(); q.focus(); });
+
+  view.querySelectorAll('[data-entfilter]').forEach(btn =>
+    btn.addEventListener('click', () => { entityFilter = btn.dataset.entfilter; renderEntities(); }));
+
+  document.getElementById('new-subject').addEventListener('click', openNewSubject);
+}
+
+function openNewSubject() {
+  openSheet('Track someone unnamed', `
+    <p class="small muted">Give them a working name you will recognise. Everything you learn attaches to it, and when you are sure who they are, the whole file folds into that person.</p>
+    <div class="spacer"></div>
+    <form id="subject-form">
+      <label class="field"><span class="lab">Working name</span>
+        <input type="text" name="codename" placeholder="the page admin · the man in the grey pickup" autocomplete="off"></label>
+      <label class="field"><span class="lab">What kind of subject</span>
+        <select name="type">
+          <option value="person">person</option>
+          <option value="org">organisation</option>
+          <option value="thing">thing</option>
+        </select></label>
+      <button class="primary" type="submit">Start the file</button>
+    </form>
+    <p class="tiny muted" style="margin-top:14px">Naming the wrong person is the real risk here, not staying unsure. Every candidate you add will ask what would prove it wrong.</p>`);
+
+  document.getElementById('subject-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const codename = new FormData(e.target).get('codename').trim();
+    if (!codename) return toast('Give them a working name.');
+    if (M.findEntityByName(codename)) return toast('That name is already in the file.');
+    const entity = await M.createSubject(codename, new FormData(e.target).get('type'));
+    render();
+    openEntity(entity.id);
+  });
 }
 
 const confChip = id => {
   const c = M.CONFIDENCE.find(x => x.id === id) || M.CONFIDENCE[2];
   return `<span class="chip" style="color:var(--${c.tone})">${c.label}</span>`;
+};
+
+const candidateCard = ({ relation, other }) => {
+  const out = relation.confidence === 'ruled_out';
+  return `
+    <div class="card" style="${out ? 'opacity:0.55' : ''}">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+        <strong data-entity="${other.id}" style="flex:1">${esc(other.name)}</strong>
+        ${confChip(relation.confidence)}
+      </div>
+      ${relation.note ? `<div class="small" style="margin-top:8px">${esc(relation.note)}</div>` : ''}
+      ${relation.counter
+        ? `<div class="small" style="margin-top:8px;color:var(--warn)">Would disprove: ${esc(relation.counter)}</div>`
+        : '<div class="tiny" style="margin-top:8px;color:var(--bad)">Nothing recorded that would disprove this.</div>'}
+      <div class="actions">
+        ${out
+          ? `<button class="ghost" data-reopen="${relation.id}">Put back in play</button>`
+          : `<button class="ghost" data-resolve="${relation.id}">This is them</button>
+             <button class="ghost" data-ruleout="${relation.id}">Rule out</button>`}
+        <button class="ghost" data-reldel="${relation.id}">Remove</button>
+      </div>
+    </div>`;
 };
 
 const relationRow = ({ relation, other, label }) => `
@@ -433,6 +500,8 @@ export function openEntity(id) {
   openEntityId = id;
 
   const attrs = (p.entity.attributes || []).filter(a => a.k || a.v);
+  const candidates = p.entity.provisional ? M.candidatesFor(p.entity.id) : [];
+  const connections = p.relations.filter(x => !(p.entity.provisional && x.relation.type === 'may_be'));
 
   openSheet(p.entity.name, `
     ${attrs.length ? `<dl class="attrs">${attrs.map(a => `<div><dt>${esc(a.k)}</dt><dd>${esc(a.v)}</dd></div>`).join('')}</dl><div class="spacer"></div>` : ''}
@@ -453,7 +522,9 @@ export function openEntity(id) {
         <textarea name="notes" style="min-height:70px">${esc(p.entity.notes || '')}</textarea></label>
 
       <h2>What you have on ${esc(p.entity.name)}</h2>
-      <p class="tiny muted" style="margin-bottom:8px">Standing facts — role, employer, phone, plate, who they are related to. Things that stay true, as opposed to things that happened.</p>
+      <p class="tiny muted" style="margin-bottom:8px">${p.entity.provisional
+        ? 'Anything that narrows the field — vehicle, hours, dialect, where they turn up, who they arrive with. Details that would fit few people are worth more than details that fit many.'
+        : 'Standing facts — role, employer, phone, plate, who they are related to. Things that stay true, as opposed to things that happened.'}</p>
       <div id="attr-rows">${attrRows(p.entity.attributes || [])}</div>
       <button class="ghost" type="button" id="attr-add" style="width:100%">Add a detail</button>
 
@@ -478,6 +549,29 @@ export function openEntity(id) {
     </form>` : ''}
     </details>
 
+    ${p.entity.provisional ? `
+    <div class="spacer"></div>
+    <h2>Who is this?</h2>
+    <p class="tiny muted" style="margin-bottom:10px">Candidates, how sure you are, and what would prove each one wrong. Deciding on the wrong person is the failure that matters.</p>
+    ${candidates.length ? candidates.map(candidateCard).join('') : '<p class="muted small">No candidates yet. The details above are what will eventually narrow it.</p>'}
+
+    <details class="more">
+      <summary>Add a candidate</summary>
+      <form id="cand-form">
+        <label class="field"><span class="lab">Who might it be — a new name is created</span>
+          <input type="text" name="other" list="all-entity-names" autocomplete="off" placeholder="Name"></label>
+        <label class="field"><span class="lab">How sure are you?</span>
+          <select name="confidence">
+            ${M.CONFIDENCE.filter(c => c.id !== 'ruled_out').map(c => `<option value="${c.id}" ${c.id === 'rumoured' ? 'selected' : ''}>${c.label}</option>`).join('')}
+          </select></label>
+        <label class="field"><span class="lab">What points to them</span>
+          <input type="text" name="note" placeholder="same pickup, same hours"></label>
+        <label class="field"><span class="lab">What would prove this wrong</span>
+          <input type="text" name="counter" placeholder="she was out of province that week"></label>
+        <button class="primary" type="submit">Add candidate</button>
+      </form>
+    </details>` : ''}
+
     <div class="spacer"></div>
     <h2>Appears in</h2>
     <!-- domains -->
@@ -486,7 +580,7 @@ export function openEntity(id) {
 
     <div class="spacer"></div>
     <h2>Connections</h2>
-    ${p.relations.length ? p.relations.map(relationRow).join('') : '<p class="muted small">No connections recorded.</p>'}
+    ${connections.length ? connections.map(relationRow).join('') : '<p class="muted small">No connections recorded.</p>'}
 
     <details class="more">
       <summary>Add a connection</summary>
@@ -567,6 +661,23 @@ export function openEntity(id) {
     toast('Saved.');
   });
 
+  const candForm = document.getElementById('cand-form');
+  if (candForm) candForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const name = f.get('other').trim();
+    if (!name) return toast('Name the candidate.');
+    const otherId = await M.ensureEntity(name);
+    if (otherId === p.entity.id) return toast('That is the subject themselves.');
+    await M.saveRelation({
+      fromId: p.entity.id, toId: otherId, type: 'may_be',
+      confidence: f.get('confidence'), note: f.get('note'), counter: f.get('counter'),
+    });
+    openEntity(p.entity.id);
+    render();
+    toast('Candidate added.');
+  });
+
   document.getElementById('rel-form').addEventListener('submit', async e => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -613,6 +724,39 @@ export function openEntity(id) {
     closeSheet();
     render();
     toast('Entity deleted.');
+  });
+}
+
+function openResolve(relationId) {
+  const relation = M.state.relations.find(r => r.id === relationId);
+  if (!relation) return;
+  const subject = M.entityById(relation.fromId);
+  const identity = M.entityById(relation.toId);
+  if (!subject || !identity) return;
+
+  openSheet('Name this subject', `
+    <p class="small">You are saying <strong>${esc(subject.name)}</strong> is <strong>${esc(identity.name)}</strong>.</p>
+    <div class="spacer"></div>
+    <p class="small muted">Everything filed under the working name moves onto them permanently, and the other candidates are dropped. This cannot be undone from inside the app — only by restoring a backup.</p>
+    ${relation.counter ? `<div class="card" style="border-color:var(--accent-dim)"><strong class="small">You said this would disprove it:</strong><div class="small" style="margin-top:6px">${esc(relation.counter)}</div><div class="tiny muted" style="margin-top:8px">Has that been checked?</div></div>` : ''}
+    <form id="resolve-form">
+      <label class="field"><span class="lab">What convinced you</span>
+        <textarea name="reason" style="min-height:90px" placeholder="The evidence, not the hunch."></textarea></label>
+      <button class="primary" type="submit">Confirm the identification</button>
+      <div class="spacer"></div>
+      <button class="ghost" type="button" id="resolve-cancel" style="width:100%">Not yet</button>
+    </form>`);
+
+  document.getElementById('resolve-cancel').addEventListener('click', () => openEntity(subject.id));
+
+  document.getElementById('resolve-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const reason = new FormData(e.target).get('reason').trim();
+    if (!reason) return toast('Write down what convinced you.');
+    await M.resolveSubject(subject.id, identity.id, reason);
+    render();
+    openEntity(identity.id);
+    toast('Identified.');
   });
 }
 
@@ -745,6 +889,16 @@ function renderBrief() {
       <div class="chips" style="margin-top:8px">
         ${b.hot.map(h => `<button class="chip entity" data-entity="${h.profile.entity.id}">${esc(h.profile.entity.name)} ·${h.recentCount}</button>`).join('')}
       </div>
+    </div>` : ''}
+
+    ${b.subjects.length ? `<div class="card">
+      <h3>Unidentified · ${b.subjects.length}</h3>
+      ${b.subjects.map(sub => `
+        <div class="small" style="margin-top:8px">
+          <button class="chip entity" data-entity="${sub.entity.id}">${esc(sub.entity.name)}</button>
+          <span class="muted tiny">${sub.observations} observation${sub.observations === 1 ? '' : 's'} · ${sub.candidates} candidate${sub.candidates === 1 ? '' : 's'} in play</span>
+        </div>`).join('')}
+      ${b.subjects.some(sub => !sub.candidates && sub.observations >= 3) ? '<p class="tiny muted" style="margin-top:10px">A subject with material but no candidate usually means you have not yet asked who it could be.</p>' : ''}
     </div>` : ''}
 
     ${b.newRelations.length ? `<div class="card">
@@ -1127,6 +1281,20 @@ export function wireGlobalEvents() {
       if (q) await M.saveQuestion({ ...q, answeredAt: q.answeredAt ? null : new Date().toISOString() });
       closeSheet();
       return render();
+    }
+
+    const resolve = e.target.closest('[data-resolve]');
+    if (resolve) return openResolve(resolve.dataset.resolve);
+
+    const setConfidence = e.target.closest('[data-ruleout], [data-reopen]');
+    if (setConfidence) {
+      const id = setConfidence.dataset.ruleout || setConfidence.dataset.reopen;
+      const relation = M.state.relations.find(r => r.id === id);
+      if (!relation) return;
+      await M.saveRelation({ ...relation, confidence: setConfidence.dataset.ruleout ? 'ruled_out' : 'rumoured' });
+      render();
+      if (openEntityId) openEntity(openEntityId);
+      return;
     }
 
     const reldel = e.target.closest('[data-reldel]');

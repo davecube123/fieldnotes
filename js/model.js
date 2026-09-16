@@ -55,14 +55,16 @@ export const REL_TYPES = [
   { id: 'allied',     forward: 'is allied with',    inverse: 'is allied with' },
   { id: 'opposed',    forward: 'is opposed to',     inverse: 'is opposed to' },
   { id: 'linked',     forward: 'is connected to',   inverse: 'is connected to' },
+  { id: 'may_be',     forward: 'may be',            inverse: 'may be the person behind' },
 ];
 
 // Who owns what is usually rumour before it is fact. Recording which is which
 // is the whole difference between a useful file and a rumour mill.
 export const CONFIDENCE = [
-  { id: 'confirmed', label: 'Confirmed', tone: 'good' },
-  { id: 'probable',  label: 'Probable',  tone: 'warn' },
-  { id: 'rumoured',  label: 'Rumoured',  tone: 'bad'  },
+  { id: 'confirmed', label: 'Confirmed', tone: 'good'  },
+  { id: 'probable',  label: 'Probable',  tone: 'warn'  },
+  { id: 'rumoured',  label: 'Rumoured',  tone: 'bad'   },
+  { id: 'ruled_out', label: 'Ruled out', tone: 'muted' },
 ];
 
 export const relType = id => REL_TYPES.find(t => t.id === id) || REL_TYPES[REL_TYPES.length - 1];
@@ -204,8 +206,42 @@ async function ensureEntities(names) {
 
 export const ensureEntity = async name => (await ensureEntities([name]))[0];
 
+// A subject is an entity you cannot name yet: the page admin, the man in the
+// grey pickup, whoever actually owns the shop. It behaves like any other entity
+// — observations, attributes, links — until it is resolved into a real identity.
+export async function createSubject(codename, type = 'person') {
+  const id = await ensureEntity(codename);
+  const entity = entityById(id);
+  return saveEntity({ ...entity, type, provisional: true });
+}
+
+export const subjects = () => state.entities.filter(e => e.provisional);
+
+export const candidatesFor = subjectId =>
+  relationsFor(subjectId).filter(x => x.relation.type === 'may_be');
+
+// Naming a subject is the one irreversible step, so it is deliberate: the
+// codename survives as an alias, the reasoning is written into the notes, and
+// every rejected candidate link is dropped rather than migrated onto the person.
+export async function resolveSubject(subjectId, identityId, reason = '') {
+  const subject = entityById(subjectId);
+  const identity = entityById(identityId);
+  if (!subject || !identity) throw new Error('Both the subject and the identity must exist.');
+
+  for (const { relation } of candidatesFor(subjectId)) await deleteRelation(relation.id);
+
+  const stamp = new Date().toISOString().slice(0, 10);
+  identity.notes = [identity.notes, `Identified as “${subject.name}” on ${stamp}.${reason ? ` ${reason}` : ''}`]
+    .filter(Boolean).join('\n\n');
+  await saveEntity(identity);
+
+  const merged = await mergeEntities(subjectId, identityId);
+  return saveEntity({ ...merged, provisional: false });
+}
+
 export async function saveEntity(entity) {
   entity.key = normKey(entity.name);
+  entity.provisional = !!entity.provisional;
   entity.attributes = (entity.attributes || [])
     .map(a => ({ k: (a.k || '').trim(), v: (a.v || '').trim() }))
     .filter(a => a.k || a.v);
@@ -352,6 +388,7 @@ export async function saveRelation(r) {
     type: r.type || 'linked',
     confidence: r.confidence || 'rumoured',
     note: (r.note || '').trim(),
+    counter: (r.counter || '').trim(),
     createdAt: r.createdAt || now,
     updatedAt: now,
   };
@@ -487,8 +524,13 @@ export function brief(days = 7) {
     followUps: state.observations.filter(o => o.followUp),
     openQuestions: state.questions.filter(q => !q.answeredAt),
     answeredRecently: state.questions.filter(q => q.answeredAt && q.answeredAt >= since),
-    newRelations: state.relations.filter(r => r.createdAt >= since),
-    unconfirmedRelations: state.relations.filter(r => r.confidence === 'rumoured'),
+    newRelations: state.relations.filter(r => r.createdAt >= since && r.type !== 'may_be'),
+    subjects: subjects().map(e => ({
+      entity: e,
+      observations: observationsFor(e.id).length,
+      candidates: candidatesFor(e.id).filter(c => c.relation.confidence !== 'ruled_out').length,
+    })),
+    unconfirmedRelations: state.relations.filter(r => r.confidence === 'rumoured' && r.type !== 'may_be'),
     unsourced: recent.filter(o => !o.source).length,
   };
 }

@@ -201,6 +201,87 @@ await session('Relationships between entities', async page => {
   check('deleting an entity leaves no dangling links', afterDelete === 0);
 });
 
+await session('Tracking an unidentified subject to a name', async page => {
+  await page.click('.tab[data-view=entities]');
+  await page.click('#new-subject');
+  await page.fill('#subject-form input[name=codename]', 'the page admin');
+  await page.click('#subject-form button.primary');
+  await page.waitForTimeout(400);
+  check('subject card opens on creation',
+    (await page.locator('#sheet-content').textContent()).includes('Who is this?'));
+  await page.click('#sheet-close');
+
+  await file(page, 'The @[the page admin] posts council agendas hours before they are published.');
+  await file(page, '@[the page admin] used the phrase "per our last executive session".', { verbatim: true, source: 'the page itself' });
+
+  await page.click('.tab[data-view=entities]');
+  await page.click('[data-entfilter=subjects]');
+  check('unidentified filter isolates subjects', await page.locator('.rowitem').count() === 1);
+  await page.locator('.rowitem').first().click();
+  await page.waitForTimeout(300);
+
+  // two candidates, each with what would kill the theory
+  for (const [name, conf, why, counter] of [
+    ['Ernesto Dimaano', 'probable', 'sits in executive session', 'he was on leave in March'],
+    ['Rosa Dimaano', 'rumoured', 'knows the agenda early', 'she has no council access'],
+  ]) {
+    await page.locator('#sheet-content summary', { hasText: 'Add a candidate' }).click();
+    await page.fill('#cand-form input[name=other]', name);
+    await page.selectOption('#cand-form select[name=confidence]', conf);
+    await page.fill('#cand-form input[name=note]', why);
+    await page.fill('#cand-form input[name=counter]', counter);
+    await page.click('#cand-form button.primary');
+    await page.waitForTimeout(400);
+  }
+  check('candidates are listed with their disproof',
+    (await page.locator('#sheet-content').textContent()).includes('Would disprove: he was on leave in March'));
+
+  await page.locator('#sheet-content [data-ruleout]').last().click();
+  await page.waitForTimeout(300);
+  check('ruling out keeps the candidate on file, marked',
+    (await page.locator('#sheet-content').textContent()).includes('Ruled out'));
+
+  // a bare confirmation should not be enough to name someone
+  await page.locator('#sheet-content [data-resolve]').first().click();
+  await page.waitForTimeout(300);
+  check('resolution restates what would have disproved it',
+    (await page.locator('#sheet-content').textContent()).includes('he was on leave in March'));
+  await page.click('#resolve-form button.primary');
+  await page.waitForTimeout(300);
+  check('naming without written reasoning is refused',
+    await page.locator('#resolve-form').count() === 1);
+
+  await page.fill('#resolve-form textarea[name=reason]', 'Posted the agenda 40 minutes before the session he chaired.');
+  await page.click('#resolve-form button.primary');
+  await page.waitForTimeout(600);
+
+  const after = await page.evaluate(() => {
+    const M = window.spy.model;
+    const person = M.state.entities.find(e => e.name === 'Ernesto Dimaano');
+    return {
+      subjectsLeft: M.subjects().length,
+      codenameKept: (person.aliases || []).includes('the page admin'),
+      observations: M.observationsFor(person.id).length,
+      provisional: !!person.provisional,
+      reasoned: person.notes.includes('40 minutes'),
+      stamped: person.notes.includes('Identified as'),
+      candidateLinksLeft: M.state.relations.filter(r => r.type === 'may_be').length,
+      dangling: M.state.relations.filter(r => !M.entityById(r.fromId) || !M.entityById(r.toId)).length,
+    };
+  });
+  check('the working name folds away', after.subjectsLeft === 0 && !after.provisional);
+  check('the working name survives as an alias', after.codenameKept);
+  check('everything filed under it moves across', after.observations === 2, `got ${after.observations}`);
+  check('the reasoning is written into the file', after.reasoned && after.stamped);
+  check('rejected candidates are dropped, not inherited', after.candidateLinksLeft === 0);
+  check('no dangling links after resolution', after.dangling === 0);
+
+  await page.click('#sheet-close');
+  await page.click('.tab[data-view=entities]');
+  check('a tag on the old working name still resolves',
+    await page.evaluate(() => !!window.spy.model.findEntityByName('the page admin')));
+});
+
 await session('Questions as answer documents', async page => {
   await page.click('.tab[data-view=questions]');
   await page.fill('#q-form input[name=text]', 'How does a land lease actually work here?');
