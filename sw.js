@@ -1,8 +1,8 @@
 // Offline shell. Bump CACHE when shipping changes so clients pick them up.
-const CACHE = 'fieldnotes-v1';
+const CACHE = 'fieldnotes-v2';
 const SHELL = [
   './', './index.html', './styles.css', './manifest.webmanifest',
-  './js/app.js', './js/ui.js', './js/model.js', './js/db.js', './js/crypto.js',
+  './js/app.js', './js/ui.js', './js/model.js', './js/db.js', './js/crypto.js', './js/sync.js',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png',
 ];
 

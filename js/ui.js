@@ -2,6 +2,7 @@
 // a single person can type is far too small for that to matter.
 
 import * as M from './model.js';
+import * as Sync from './sync.js';
 
 const view = document.getElementById('view');
 const sheet = document.getElementById('sheet');
@@ -69,6 +70,15 @@ export function go(name) {
   window.scrollTo(0, 0);
 }
 
+// Android share sheet hands the app a title/text/url; drop it straight into a
+// draft observation rather than making the user retype it.
+export function seedCapture({ title = '', text = '', url = '' }) {
+  const body = [title, text].filter(Boolean).join(' — ');
+  draft = { ...blankDraft(), body, source: url || draft.source };
+  go('capture');
+  if (body || url) toast('Shared in — add your own read on it.');
+}
+
 export function render() {
   if (M.isLocked()) return renderLock();
   document.body.classList.remove('locked');
@@ -119,6 +129,7 @@ function renderLock({ recovery = false, error = '' } = {}) {
       recovery ? await M.unlockWithRecoveryKey(secret) : await M.unlock(secret);
       document.body.classList.remove('locked');
       go('brief');
+      window.dispatchEvent(new Event('fieldnotes:unlocked'));
     } catch {
       renderLock({ recovery, error: recovery ? 'That recovery key does not open this file.' : 'Wrong passphrase.' });
     }
@@ -1081,6 +1092,9 @@ export function openData() {
     <div id="import-unlock"></div>
 
     <div class="spacer"></div>
+    <div id="sync-block"></div>
+
+    <div class="spacer"></div>
     <div id="storage-status" class="tiny muted"></div>
 
     <div class="spacer"></div>
@@ -1127,6 +1141,7 @@ export function openData() {
   });
 
   showStorageStatus();
+  showSyncBlock();
   document.getElementById('open-security').addEventListener('click', openSecurity);
 
   document.getElementById('do-wipe').addEventListener('click', async () => {
@@ -1135,6 +1150,127 @@ export function openData() {
     closeSheet();
     render();
     toast('Erased.');
+  });
+}
+
+async function showSyncBlock() {
+  const el = document.getElementById('sync-block');
+  if (!el) return;
+
+  if (!M.isEncrypted()) {
+    el.innerHTML = '<p class="tiny muted">Automatic backup needs a passphrase first — it stores a GitHub token, and that is only kept encrypted.</p>';
+    return;
+  }
+
+  const config = await M.loadSyncConfig();
+  const hours = M.hoursSinceSync();
+  const ago = hours === null ? 'never' : hours < 1 ? 'less than an hour ago' : hours < 48 ? `${Math.round(hours)} hours ago` : `${Math.round(hours / 24)} days ago`;
+
+  el.innerHTML = config
+    ? `<div class="card">
+         <h3>Automatic backup</h3>
+         <div class="small muted">${esc(config.owner)}/${esc(config.repo)} · ${esc(config.path)}</div>
+         <div class="small" style="margin-top:6px">Last sent <strong>${esc(ago)}</strong></div>
+         <div class="actions">
+           <button class="ghost" id="sync-now">Send now</button>
+           <button class="ghost" id="sync-edit">Change</button>
+         </div>
+       </div>`
+    : `<button class="ghost" id="sync-edit" style="width:100%">Set up automatic backup…</button>`;
+
+  const now = document.getElementById('sync-now');
+  if (now) now.addEventListener('click', async () => {
+    now.disabled = true;
+    now.textContent = 'Sending…';
+    const result = await runSync({ manual: true });
+    showSyncBlock();
+    toast(result.ok ? `Backed up (${result.commit}).` : result.error);
+  });
+
+  document.getElementById('sync-edit').addEventListener('click', () => openSyncSetup(config));
+}
+
+// Returns rather than throws: this also runs unattended at startup, where a
+// failure should surface quietly instead of breaking the app.
+export async function runSync({ manual = false } = {}) {
+  try {
+    const config = await M.loadSyncConfig();
+    if (!config) return { ok: false, error: 'Automatic backup is not set up.' };
+    const result = await Sync.push(config, await M.exportEncrypted());
+    M.markSynced();
+    return { ok: true, ...result };
+  } catch (err) {
+    if (!manual) console.warn('Background backup failed:', err.message);
+    return { ok: false, error: err.message || 'Backup failed.' };
+  }
+}
+
+function openSyncSetup(config, error = '') {
+  openSheet('Automatic backup', `
+    <p class="small muted">Each backup is committed to a private repository as a sealed file. GitHub stores something it cannot read, and every version is kept in the repository's history.</p>
+    <div class="card" style="border-color:var(--accent-dim)">
+      <strong class="small">This is the only feature that uses the network.</strong>
+      <div class="small muted" style="margin-top:6px">With it off, the app never makes an outbound request. With it on, ciphertext goes to GitHub and nothing else.</div>
+    </div>
+
+    <form id="sync-form">
+      <div class="row">
+        <label class="field"><span class="lab">Repo owner</span>
+          <input type="text" name="owner" value="${esc(config?.owner || '')}" autocomplete="off" placeholder="your username"></label>
+        <label class="field"><span class="lab">Repository</span>
+          <input type="text" name="repo" value="${esc(config?.repo || '')}" autocomplete="off" placeholder="private repo"></label>
+      </div>
+      <label class="field"><span class="lab">File path in the repo</span>
+        <input type="text" name="path" value="${esc(config?.path || 'fieldnotes.fnotes')}" autocomplete="off"></label>
+      <label class="field"><span class="lab">Fine-grained token${config ? ' — leave blank to keep the current one' : ''}</span>
+        <input type="password" name="token" autocomplete="off" placeholder="github_pat_…"></label>
+      <button class="primary" type="submit">Check and save</button>
+    </form>
+    ${error ? `<p class="small" style="color:var(--bad);margin-top:12px">${esc(error)}</p>` : ''}
+
+    ${config ? '<div class="spacer"></div><button class="ghost" id="sync-forget" style="width:100%;color:var(--bad)">Stop and forget the token</button>' : ''}
+
+    <div class="spacer"></div>
+    <details class="more"><summary>How to make the token</summary>
+      <p class="small muted">On github.com (Desktop site): <strong>Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token</strong>.</p>
+      <p class="small muted">Repository access: <strong>Only select repositories</strong> → pick the private backup repo. Permissions: <strong>Contents → Read and write</strong>. Nothing else.</p>
+      <p class="tiny muted">Give it an expiry you will notice. A token that can only write one private repository is the smallest key that does this job.</p>
+    </details>`);
+
+  document.getElementById('sync-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const next = {
+      owner: f.get('owner').trim(),
+      repo: f.get('repo').trim(),
+      path: f.get('path').trim() || 'fieldnotes.fnotes',
+      token: f.get('token').trim() || config?.token || '',
+    };
+    if (!next.owner || !next.repo || !next.token) return openSyncSetup(config, 'Owner, repository and token are all needed.');
+
+    const btn = e.target.querySelector('button');
+    btn.disabled = true;
+    btn.textContent = 'Checking…';
+    try {
+      const repo = await Sync.verify(next);
+      if (!repo.private && !confirm('That repository is PUBLIC. The backup is encrypted, but anyone could download it and attack the passphrase offline. Continue anyway?')) {
+        return openSyncSetup(config);
+      }
+      await M.saveSyncConfig(next);
+      const result = await runSync({ manual: true });
+      closeSheet();
+      toast(result.ok ? `Backed up to ${repo.fullName}.` : result.error);
+    } catch (err) {
+      openSyncSetup(config, err.message);
+    }
+  });
+
+  const forget = document.getElementById('sync-forget');
+  if (forget) forget.addEventListener('click', async () => {
+    if (!confirm('Stop automatic backups and delete the stored token from this device?')) return;
+    await M.clearSyncConfig();
+    closeSheet();
+    toast('Stopped.');
   });
 }
 

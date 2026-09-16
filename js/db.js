@@ -1,7 +1,7 @@
 // Thin promise wrapper over IndexedDB. Everything lives on the device.
 
 const DB_NAME = 'fieldnotes';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 let handle = null;
 
@@ -25,6 +25,11 @@ export function open() {
       }
       if (!db.objectStoreNames.contains('relations')) {
         db.createObjectStore('relations', { keyPath: 'id' });
+      }
+      // Device-local settings that must never travel in an export — currently
+      // just the backup credentials. Encrypted like everything else.
+      if (!db.objectStoreNames.contains('settings')) {
+        db.createObjectStore('settings', { keyPath: 'id' });
       }
       // Holds the single wrapped-master-key record. Never encrypted itself —
       // it is what makes decryption possible.

@@ -551,9 +551,46 @@ export function brief(days = 7) {
   };
 }
 
+/* ---------------- off-device backup settings ---------------- */
+
+// Deliberately outside STORES: the token is a credential for this device only
+// and must never ride along in an export or a restore.
+export async function saveSyncConfig(config) {
+  if (!masterKey) throw new Error('Set a passphrase first — the token is stored encrypted.');
+  await db.put('settings', { id: 'sync', enc: await C.encryptJson(masterKey, config) });
+}
+
+export async function loadSyncConfig() {
+  if (!masterKey) return null;
+  const row = await db.get('settings', 'sync');
+  if (!row) return null;
+  try {
+    return await C.decryptJson(masterKey, row.enc);
+  } catch {
+    return null;
+  }
+}
+
+export const clearSyncConfig = () => db.del('settings', 'sync');
+
+export function lastSyncAt() {
+  try { return localStorage.getItem(SYNC_KEY); } catch { return null; }
+}
+
+export function hoursSinceSync() {
+  const at = lastSyncAt();
+  return at === null ? null : (Date.now() - new Date(at)) / 3600000;
+}
+
+export function markSynced() {
+  try { localStorage.setItem(SYNC_KEY, new Date().toISOString()); } catch {}
+  markBackedUp();
+}
+
 /* ---------------- backup bookkeeping ---------------- */
 
 const BACKUP_KEY = 'fieldnotes:last-backup';
+const SYNC_KEY = 'fieldnotes:last-sync';
 
 // Backups written before the rename still carry the old tag, so both are read.
 const FORMAT = 'fieldnotes';
@@ -656,4 +693,11 @@ export async function importPayload(payload, { replace = false } = {}) {
 export async function wipe() {
   await Promise.all(STORES.map(s => db.clear(s)));
   await load();
+}
+
+// Turning encryption off would leave a token encrypted under a key that no
+// longer exists, so it goes with it.
+export async function disableEncryptionAndForgetToken(passphrase) {
+  await disableEncryption(passphrase);
+  await clearSyncConfig();
 }

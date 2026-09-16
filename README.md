@@ -153,6 +153,22 @@ file is unreadable by anyone, permanently.
 Restoring merges rather than overwrites, so pulling in an old backup never
 destroys newer work. The app nags you on the Brief once a backup is a week old.
 
+### Automatic off-device backup
+
+⚙ → Backup → *Set up automatic backup*. Each backup is committed to a private
+GitHub repository as a sealed file, so the repository's history becomes your
+versioned backup. A stale backup is sent in the background when the app opens.
+
+**This is the only feature that makes a network request.** With it switched off
+the app never talks to anything. With it on, the ciphertext goes to GitHub and
+nothing else — the token is stored encrypted under your passphrase, is never
+included in an export, and is deleted if you turn encryption off.
+
+Use a fine-grained token limited to the one private repository, with
+**Contents: read and write** and no other permission. Backing up to a *public*
+repository is possible and the app will warn you: the file stays unreadable, but
+anyone could take a copy and attack your passphrase at leisure.
+
 ### Keeping the device copy from being evicted
 
 On first run the app calls `navigator.storage.persist()`, asking the browser not
@@ -171,6 +187,18 @@ being breached, the hosting provider, anyone who opens the app's URL.
 Not covered: malware with a keylogger on an unlocked phone, someone watching you
 type, or coercion. Encryption at rest doesn't help against any of those.
 
+## Capturing from elsewhere
+
+The app registers as an Android share target. Reading something in a browser, a
+messaging app or a feed, **Share → Fieldnotes** opens a draft with the text in
+the body and the link already in the source field.
+
+Pulling feeds in directly is deliberately not implemented. A static page cannot
+fetch arbitrary feeds — the browser's same-origin policy blocks it and almost no
+publisher opts out — so it would need a server component, which would undo the
+property that this app has no backend and phones home to nothing. Sharing in
+takes two taps and costs nothing architecturally.
+
 ## Files
 
 ```
@@ -178,6 +206,7 @@ index.html            app shell
 styles.css            all styling
 js/db.js              IndexedDB wrapper
 js/crypto.js          the vault: key wrapping, AES-GCM records, recovery keys
+js/sync.js            optional sealed backup to a private GitHub repository
 js/model.js           data model, entity parsing, brief and link derivation
 js/ui.js              views and event wiring
 js/app.js             boot, service worker registration
@@ -202,10 +231,8 @@ plaintext survives encryption.
 
 ## Where this goes next
 
-- Automated ingestion for the public half — RSS, official gazettes, price and FX
-  feeds — so manual effort stays reserved for what only you can see.
 - AI-assisted entity extraction and connection suggestions at capture time.
 - Timeline view per entity, and alerting when a dormant entity resurfaces.
+- Feed ingestion, if it ever earns a small proxy service to make it possible.
 
-Deliberately not here yet: any of that matters only once there is a habit and a
-body of observations to work on. Use it for two weeks first.
+None of it matters until there is a habit and a body of observations to work on.

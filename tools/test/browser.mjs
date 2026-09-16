@@ -454,6 +454,103 @@ await session('Encryption, locking and sealed backups', async page => {
   check('changed passphrase works', await page.evaluate(() => window.spy.model.state.observations.length) === 2);
 });
 
+await session('Sharing something in from elsewhere', async page => {
+  await page.goto(`${URL}?title=${encodeURIComponent('Council raises port fees')}&text=${encodeURIComponent('effective Monday')}&url=${encodeURIComponent('https://example.org/story')}`);
+  await page.waitForSelector('#capture');
+  check('shared text lands in the draft',
+    (await page.inputValue('textarea[name=body]')).includes('Council raises port fees')
+    && (await page.inputValue('textarea[name=body]')).includes('effective Monday'));
+  await page.click('details.more > summary');
+  check('the link becomes the source', (await page.inputValue('input[name=source]')) === 'https://example.org/story');
+  check('the query string is cleared so a reload does not re-seed', !page.url().includes('?'));
+
+  await page.click('button.primary[type=submit]');
+  await page.waitForTimeout(300);
+  check('it files like any other observation',
+    await page.evaluate(() => window.spy.model.state.observations.length) === 1);
+});
+
+// The network path is stubbed: these assert what the app *sends*, which is the
+// part that matters. They never touch GitHub.
+await session('Off-device backup', async page => {
+  await page.addInitScript(() => {
+    window.__calls = [];
+    const real = window.fetch;
+    window.fetch = async (url, init = {}) => {
+      const href = String(url);
+      if (!href.startsWith('https://api.github.com')) return real(url, init);
+      window.__calls.push({ href, method: init.method || 'GET', body: init.body, auth: init.headers?.Authorization });
+      if (window.__failWith) return new Response('{}', { status: window.__failWith });
+      if (/\/repos\/[^/]+\/[^/]+$/.test(href)) {
+        return new Response(JSON.stringify({ private: true, full_name: 'davecube123/vault', permissions: { push: true } }), { status: 200 });
+      }
+      if (init.method === 'PUT') return new Response(JSON.stringify({ commit: { sha: 'abc1234def' } }), { status: 201 });
+      return new Response('{}', { status: 404 });  // file does not exist yet
+    };
+  });
+  await page.goto(URL);
+  await page.waitForSelector('#capture');
+
+  await file(page, 'Sensitive item — CANARYTOKEN99. @[Maria Santos]');
+
+  await page.click('#btn-data');
+  check('backup sync is refused before a passphrase exists',
+    (await page.locator('#sync-block').textContent()).includes('needs a passphrase first'));
+
+  await page.click('#open-security');
+  await page.waitForSelector('#setup-pass');
+  await page.fill('#setup-pass input[name=passphrase]', PASSPHRASE);
+  await page.fill('#setup-pass input[name=confirm]', PASSPHRASE);
+  await page.click('#setup-pass button.primary');
+  await page.waitForSelector('#recovery-done', { timeout: 30000 });
+  await page.click('#recovery-done');
+  await page.waitForTimeout(300);
+
+  await page.click('#btn-data');
+  await page.waitForTimeout(300);
+  await page.click('#sync-edit');
+  await page.fill('#sync-form input[name=owner]', 'davecube123');
+  await page.fill('#sync-form input[name=repo]', 'vault');
+  await page.fill('#sync-form input[name=token]', 'github_pat_SECRETVALUE');
+  await page.click('#sync-form button.primary');
+  await page.waitForTimeout(1500);
+
+  const calls = await page.evaluate(() => window.__calls);
+  const put = calls.find(c => c.method === 'PUT');
+  check('the repository is checked before anything is stored',
+    calls.some(c => /\/repos\/davecube123\/vault$/.test(c.href)));
+  check('a commit is pushed', !!put);
+  check('the token is sent as a bearer credential', put.auth === 'Bearer github_pat_SECRETVALUE');
+
+  const sent = JSON.parse(put.body);
+  const decoded = atob ? Buffer.from(sent.content, 'base64').toString('utf8') : '';
+  check('what is uploaded is the sealed export', JSON.parse(decoded).format === 'fieldnotes-encrypted');
+  check('the upload carries no plaintext', !decoded.includes('CANARYTOKEN99') && !decoded.includes('Maria Santos'));
+  check('the upload carries no token', !decoded.includes('github_pat_SECRETVALUE'));
+
+  check('the stored token is encrypted at rest', await page.evaluate(() => new Promise(resolve => {
+    const req = indexedDB.open('fieldnotes');
+    req.onsuccess = () => {
+      req.result.transaction('settings', 'readonly').objectStore('settings').getAll()
+        .onsuccess = e => resolve(e.target.result.length === 1 && !JSON.stringify(e.target.result).includes('github_pat_SECRETVALUE'));
+    };
+  })));
+
+  check('the token never rides along in a sealed export',
+    await page.evaluate(async () => !JSON.stringify(await window.spy.model.exportEncrypted()).includes('github_pat_SECRETVALUE')));
+
+  await page.click('#btn-data');
+  await page.waitForTimeout(400);
+  check('the sheet reports where and when it last went',
+    (await page.locator('#sync-block').textContent()).includes('davecube123/vault'));
+
+  await page.evaluate(() => { window.__failWith = 401; });
+  await page.click('#sync-now');
+  await page.waitForTimeout(1200);
+  check('a rejected token produces a readable message',
+    (await page.locator('#toast').textContent()).includes('rejected the token'));
+});
+
 await browser.close();
 console.log(failures ? `\n${failures} failing check(s)` : '\nAll checks passed');
 process.exit(failures ? 1 : 0);
