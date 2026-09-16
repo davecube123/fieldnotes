@@ -394,7 +394,7 @@ function renderEntities() {
         <span>
           <strong>${esc(r.entity.name)}</strong>
           ${r.crossDomain ? '<span class="chip cross" style="margin-left:6px">cross-domain</span>' : ''}
-          <div class="meta">${r.entity.type !== 'unknown' ? esc(r.entity.type) + ' · ' : ''}${r.domains.map(d => esc(d)).join(', ') || 'no observations'}${(r.entity.attributes || []).length ? ` · ${r.entity.attributes.length} details` : ''}</div>
+          <div class="meta">${r.entity.type !== 'unknown' ? esc(r.entity.type) + ' · ' : ''}${r.domains.map(d => esc(d)).join(', ') || 'no observations'}${(r.entity.attributes || []).length ? ` · ${r.entity.attributes.length} details` : ''}${M.relationsFor(r.entity.id).length ? ` · ${M.relationsFor(r.entity.id).length} links` : ''}</div>
         </span>
         <span class="meta">${r.count}</span>
       </button>`).join('') : '<p class="empty">Entities appear here once you tag something with @.</p>'}`;
@@ -403,15 +403,34 @@ function renderEntities() {
   q.addEventListener('input', () => { entityQuery = q.value; renderEntities(); q.focus(); });
 }
 
+const confChip = id => {
+  const c = M.CONFIDENCE.find(x => x.id === id) || M.CONFIDENCE[2];
+  return `<span class="chip" style="color:var(--${c.tone})">${c.label}</span>`;
+};
+
+const relationRow = ({ relation, other, label }) => `
+  <div class="rowitem">
+    <span data-entity="${other.id}" style="flex:1;min-width:0">
+      <span class="muted small">${esc(label)}</span>
+      <strong style="display:block">${esc(other.name)}</strong>
+      ${relation.note ? `<div class="meta">${esc(relation.note)}</div>` : ''}
+    </span>
+    ${confChip(relation.confidence)}
+    <button class="icon-btn" data-reldel="${relation.id}" aria-label="Remove connection">✕</button>
+  </div>`;
+
 const attrRows = attrs => (attrs.length ? attrs : [{ k: '', v: '' }, { k: '', v: '' }])
   .map(a => `<div class="row" style="margin-bottom:8px">
     <input type="text" name="attr-k" value="${esc(a.k)}" placeholder="phone / role / plate" style="flex:2">
     <input type="text" name="attr-v" value="${esc(a.v)}" placeholder="detail" style="flex:3">
   </div>`).join('');
 
+let openEntityId = null;
+
 export function openEntity(id) {
   const p = M.entityProfile(id);
   if (!p.entity) return;
+  openEntityId = id;
 
   const attrs = (p.entity.attributes || []).filter(a => a.k || a.v);
 
@@ -466,6 +485,53 @@ export function openEntity(id) {
     ${p.crossDomain ? '<p class="tiny" style="color:var(--warn);margin-top:8px">Crosses domains — the joins are where the non-obvious sits.</p>' : ''}
 
     <div class="spacer"></div>
+    <h2>Connections</h2>
+    ${p.relations.length ? p.relations.map(relationRow).join('') : '<p class="muted small">No connections recorded.</p>'}
+
+    <details class="more">
+      <summary>Add a connection</summary>
+      <form id="rel-form">
+        <label class="field"><span class="lab">How are they connected?</span>
+          <select name="type">
+            ${M.REL_TYPES.flatMap(t => t.forward === t.inverse
+              ? [`<option value="${t.id}|out">${esc(p.entity.name)} ${t.forward} …</option>`]
+              : [`<option value="${t.id}|out">${esc(p.entity.name)} ${t.forward} …</option>`,
+                 `<option value="${t.id}|in">… ${t.forward} ${esc(p.entity.name)}</option>`]).join('')}
+          </select></label>
+
+        <label class="field"><span class="lab">The other party — a new name is created</span>
+          <input type="text" name="other" list="all-entity-names" autocomplete="off" placeholder="Blue Hardware">
+          <datalist id="all-entity-names">
+            ${M.state.entities.filter(e => e.id !== p.entity.id).map(e => `<option value="${esc(e.name)}"></option>`).join('')}
+          </datalist></label>
+
+        <div class="row">
+          <label class="field"><span class="lab">How sure are you?</span>
+            <select name="confidence">
+              ${M.CONFIDENCE.map(c => `<option value="${c.id}" ${c.id === 'rumoured' ? 'selected' : ''}>${c.label}</option>`).join('')}
+            </select></label>
+          <label class="field"><span class="lab">Note</span>
+            <input type="text" name="note" placeholder="how you know"></label>
+        </div>
+
+        <button class="primary" type="submit">Add connection</button>
+      </form>
+    </details>
+
+    ${p.secondDegree.length ? `
+    <div class="spacer"></div>
+    <h2>Two steps away</h2>
+    <p class="tiny muted" style="margin-bottom:8px">Reached through someone ${esc(p.entity.name)} is already linked to.</p>
+    ${p.secondDegree.slice(0, 12).map(x => `
+      <div class="rowitem">
+        <span data-entity="${x.other.id}" style="flex:1;min-width:0">
+          <strong>${esc(x.other.name)}</strong>
+          <div class="meta">via ${esc(x.via.name)} · ${esc(x.label)}</div>
+        </span>
+        ${confChip(x.confidence)}
+      </div>`).join('')}` : ''}
+
+    <div class="spacer"></div>
     <h2>Seen alongside</h2>
     ${p.links.length ? `<div class="chips">${p.links.map(l => `<button class="chip entity" data-entity="${l.entity.id}">${esc(l.entity.name)} ·${l.count}</button>`).join('')}</div>`
                      : '<p class="muted small">Nobody yet. Co-mentions build this.</p>'}
@@ -499,6 +565,32 @@ export function openEntity(id) {
     closeSheet();
     render();
     toast('Saved.');
+  });
+
+  document.getElementById('rel-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const name = f.get('other').trim();
+    if (!name) return toast('Name the other party.');
+
+    const [type, direction] = f.get('type').split('|');
+    const otherId = await M.ensureEntity(name);
+    if (otherId === p.entity.id) return toast('That is the same entity.');
+
+    try {
+      await M.saveRelation({
+        fromId: direction === 'out' ? p.entity.id : otherId,
+        toId: direction === 'out' ? otherId : p.entity.id,
+        type,
+        confidence: f.get('confidence'),
+        note: f.get('note'),
+      });
+    } catch (err) {
+      return toast(err.message);
+    }
+    openEntity(p.entity.id);
+    render();
+    toast('Connection added.');
   });
 
   const mergeForm = document.getElementById('ent-merge');
@@ -653,6 +745,23 @@ function renderBrief() {
       <div class="chips" style="margin-top:8px">
         ${b.hot.map(h => `<button class="chip entity" data-entity="${h.profile.entity.id}">${esc(h.profile.entity.name)} ·${h.recentCount}</button>`).join('')}
       </div>
+    </div>` : ''}
+
+    ${b.newRelations.length ? `<div class="card">
+      <h3>New connections</h3>
+      ${b.newRelations.slice(0, 8).map(r => {
+        const from = M.entityById(r.fromId), to = M.entityById(r.toId);
+        return from && to
+          ? `<div class="small" style="margin-top:8px"><button class="chip entity" data-entity="${from.id}">${esc(from.name)}</button>
+             <span class="muted">${esc(M.relType(r.type).forward)}</span>
+             <button class="chip entity" data-entity="${to.id}">${esc(to.name)}</button> ${confChip(r.confidence)}</div>`
+          : '';
+      }).join('')}
+    </div>` : ''}
+
+    ${b.unconfirmedRelations.length >= 3 ? `<div class="card">
+      <h3>${b.unconfirmedRelations.length} connections still rumoured</h3>
+      <p class="small muted">Unchased rumour is what turns a file into gossip. Confirm them or mark them dead.</p>
     </div>` : ''}
 
     ${b.newEntities.length ? `<div class="card">
@@ -1018,6 +1127,15 @@ export function wireGlobalEvents() {
       if (q) await M.saveQuestion({ ...q, answeredAt: q.answeredAt ? null : new Date().toISOString() });
       closeSheet();
       return render();
+    }
+
+    const reldel = e.target.closest('[data-reldel]');
+    if (reldel) {
+      if (!confirm('Remove this connection?')) return;
+      await M.deleteRelation(reldel.dataset.reldel);
+      render();
+      if (openEntityId && !sheet.classList.contains('hidden')) openEntity(openEntityId);
+      return;
     }
 
     const qdel = e.target.closest('[data-qdel]');

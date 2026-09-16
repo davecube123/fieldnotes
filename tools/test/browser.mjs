@@ -95,7 +95,7 @@ await session('Mentions, quotes, attributes and merging', async page => {
 
   await page.click('.tab[data-view=entities]');
   await page.locator('.rowitem').first().click();
-  await page.click('#sheet-content details.more > summary');
+  await page.locator('#sheet-content summary', { hasText: 'Edit details' }).click();
   await page.fill('#ent-form input[name=aliases]', 'Rosa D.');
   const k = page.locator('#attr-rows input[name="attr-k"]');
   const v = page.locator('#attr-rows input[name="attr-v"]');
@@ -128,6 +128,77 @@ await session('Mentions, quotes, attributes and merging', async page => {
   check('merge keeps every observation', merged.obs === 4, `got ${merged.obs}`);
   check('merge keeps the old spelling as an alias', merged.aliases.includes('Rosa Dimano'));
   check('merge keeps the standing details', merged.attrs === 2);
+});
+
+await session('Relationships between entities', async page => {
+  await file(page, 'Blue Hardware on Rizal St has no owner name on the signage. @[Blue Hardware]');
+  await file(page, 'Cement delivered by @[Rosa Dimaano] to the same shop.');
+
+  // record the ownership the way you actually learn it: as rumour first
+  await page.click('.tab[data-view=entities]');
+  await page.locator('.rowitem', { hasText: 'Blue Hardware' }).first().click();
+  await page.waitForTimeout(250);
+  await page.locator('#sheet-content summary', { hasText: 'Add a connection' }).click();
+  await page.selectOption('#rel-form select[name=type]', 'owns|in');
+  await page.fill('#rel-form input[name=other]', 'Rosa Dimaano');
+  await page.selectOption('#rel-form select[name=confidence]', 'rumoured');
+  await page.fill('#rel-form input[name=note]', 'the clerk implied it');
+  await page.click('#rel-form button.primary');
+  await page.waitForTimeout(400);
+
+  const shop = await page.locator('#sheet-content').textContent();
+  check('link reads correctly from this end', shop.includes('is owned by') && shop.includes('Rosa Dimaano'));
+  check('uncertainty is recorded, not hidden', shop.includes('Rumoured'));
+
+  // the same record must read correctly from the other side
+  await page.click('#sheet-content [data-entity] >> nth=0');
+  await page.waitForTimeout(300);
+  check('link reverses on the other entity',
+    (await page.locator('#sheet-content').textContent()).includes('owns'));
+
+  // a second hop: Rosa's family should surface from the shop's card
+  await page.locator('#sheet-content summary', { hasText: 'Add a connection' }).click();
+  await page.selectOption('#rel-form select[name=type]', 'family|out');
+  await page.fill('#rel-form input[name=other]', 'Ernesto Dimaano');
+  await page.selectOption('#rel-form select[name=confidence]', 'confirmed');
+  await page.click('#rel-form button.primary');
+  await page.waitForTimeout(400);
+  check('a new party is created by name',
+    await page.evaluate(() => window.spy.model.state.entities.some(e => e.name === 'Ernesto Dimaano')));
+
+  const hops = await page.evaluate(() => {
+    const M = window.spy.model;
+    const shop = M.state.entities.find(e => e.name === 'Blue Hardware');
+    return M.secondDegree(shop.id).map(x => `${x.other.name} via ${x.via.name}`);
+  });
+  check('two steps away finds the owner\'s family', hops.some(h => h.startsWith('Ernesto Dimaano via Rosa')), hops.join('; '));
+
+  await page.click('#sheet-close');
+  await page.click('.tab[data-view=brief]');
+  await page.waitForTimeout(250);
+  check('brief reports new connections',
+    (await page.locator('#view').textContent()).includes('New connections'));
+
+  // merging must not orphan or self-link relations
+  const merged = await page.evaluate(async () => {
+    const M = window.spy.model;
+    await M.saveObservation({ body: 'note about @[Rosa Dimano]', domain: 'other' });
+    const dupe = M.state.entities.find(e => e.name === 'Rosa Dimano');
+    const real = M.state.entities.find(e => e.name === 'Rosa Dimaano');
+    await M.mergeEntities(dupe.id, real.id);
+    return { relations: M.state.relations.length, selfLinks: M.state.relations.filter(r => r.fromId === r.toId).length,
+             dangling: M.state.relations.filter(r => !M.entityById(r.fromId) || !M.entityById(r.toId)).length };
+  });
+  check('relations survive a merge intact', merged.relations === 2, JSON.stringify(merged));
+  check('merge creates no self-links or dangling ends', merged.selfLinks === 0 && merged.dangling === 0);
+
+  // deleting an entity takes its links with it
+  const afterDelete = await page.evaluate(async () => {
+    const M = window.spy.model;
+    await M.deleteEntity(M.state.entities.find(e => e.name === 'Ernesto Dimaano').id);
+    return M.state.relations.filter(r => !M.entityById(r.fromId) || !M.entityById(r.toId)).length;
+  });
+  check('deleting an entity leaves no dangling links', afterDelete === 0);
 });
 
 await session('Questions as answer documents', async page => {
@@ -174,6 +245,15 @@ await session('Questions as answer documents', async page => {
 
 await session('Encryption, locking and sealed backups', async page => {
   await file(page, 'Sensitive memo from @[Maria Santos] — CANARYTOKEN99.');
+  await file(page, 'The shop on the corner. @[Blue Hardware]');
+  await page.evaluate(async () => {
+    const M = window.spy.model;
+    await M.saveRelation({
+      fromId: M.state.entities.find(e => e.name === 'Maria Santos').id,
+      toId: M.state.entities.find(e => e.name === 'Blue Hardware').id,
+      type: 'owns', confidence: 'rumoured', note: 'CANARYRELATION',
+    });
+  });
 
   await page.click('#btn-data');
   await page.click('#open-security');
@@ -198,6 +278,13 @@ await session('Encryption, locking and sealed backups', async page => {
     };
   }));
   check('no plaintext left on disk', !raw.includes('CANARYTOKEN99') && !raw.includes('Maria Santos'));
+  check('relations are encrypted too', await page.evaluate(() => new Promise(resolve => {
+    const req = indexedDB.open('spy-work');
+    req.onsuccess = () => {
+      req.result.transaction('relations', 'readonly').objectStore('relations').getAll()
+        .onsuccess = e => resolve(e.target.result.length === 1 && !JSON.stringify(e.target.result).includes('CANARYRELATION'));
+    };
+  })));
 
   await page.reload();
   await page.waitForSelector('#unlock', { timeout: 15000 });
@@ -213,13 +300,13 @@ await session('Encryption, locking and sealed backups', async page => {
   await page.click('#unlock button.primary');
   await page.waitForSelector('.tab.active[data-view=brief]', { timeout: 30000 });
   check('right passphrase opens the file',
-    await page.evaluate(() => window.spy.model.state.observations[0].body.includes('CANARYTOKEN99')));
+    await page.evaluate(() => window.spy.model.state.observations.some(o => o.body.includes('CANARYTOKEN99'))));
 
   const sealed = await page.evaluate(() => window.spy.model.exportEncrypted());
   check('sealed backup carries no plaintext', !JSON.stringify(sealed).includes('CANARYTOKEN99'));
   check('sealed backup opens with the recovery key',
     await page.evaluate(async ([payload, key]) =>
-      (await window.spy.model.decryptExport(payload, key, { recovery: true })).observations[0].body.includes('CANARYTOKEN99'),
+      (await window.spy.model.decryptExport(payload, key, { recovery: true })).observations.some(o => o.body.includes('CANARYTOKEN99')),
     [sealed, recoveryKey]));
   check('sealed backup rejects a wrong secret',
     await page.evaluate(async payload => {
@@ -230,7 +317,9 @@ await session('Encryption, locking and sealed backups', async page => {
     await window.spy.model.wipe();
     await window.spy.model.importPayload(await window.spy.model.decryptExport(payload, secret));
   }, [sealed, PASSPHRASE]);
-  check('restore brings it back', await page.evaluate(() => window.spy.model.state.observations.length) === 1);
+  check('restore brings it back', await page.evaluate(() => window.spy.model.state.observations.length) === 2);
+  check('relations survive the round trip',
+    await page.evaluate(() => window.spy.model.state.relations[0]?.note === 'CANARYRELATION'));
   check('restored records are re-encrypted', await page.evaluate(() => new Promise(resolve => {
     const req = indexedDB.open('spy-work');
     req.onsuccess = () => {
@@ -245,7 +334,7 @@ await session('Encryption, locking and sealed backups', async page => {
   await page.fill('#unlock input[name=secret]', 'an entirely different phrase');
   await page.click('#unlock button.primary');
   await page.waitForSelector('.tab.active', { timeout: 30000 });
-  check('changed passphrase works', await page.evaluate(() => window.spy.model.state.observations.length) === 1);
+  check('changed passphrase works', await page.evaluate(() => window.spy.model.state.observations.length) === 2);
 });
 
 await browser.close();

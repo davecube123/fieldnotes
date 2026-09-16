@@ -42,7 +42,14 @@ non-obvious, and relevant to a decision does. Three design consequences:
 - **Their words are not your words.** Mark an observation verbatim and it renders
   as a quote, attributed to its source. A paraphrase you wrote three months ago
   is not evidence of what somebody said.
-- **A connection is an entity crossing domains.** When the same name shows up in
+- **Relationships are recorded, not inferred.** Who owns what, who works for
+  whom, who is married to whom — stored as typed, directed links between
+  entities. One record reads correctly from both ends: what is "owns" on her
+  card is "is owned by" on the shop's. Each carries a confidence, because who
+  owns a place is usually rumour before it is fact, and a file that can't tell
+  the two apart is a rumour mill. Two-hop traversal shows who you reach through
+  someone you already have.
+- **A connection is also an entity crossing domains.** When the same name shows up in
   observations you filed under unrelated domains, the brief flags it. That is
   the honest, useful version of "subtle connections" — no inference magic, just
   a join you would not have noticed by memory.
@@ -59,7 +66,7 @@ non-obvious, and relevant to a decision does. Three design consequences:
 |---|---|
 | **Capture** | File an observation in seconds. Domain, entities, optional grading. |
 | **Feed** | Everything filed, searchable, filterable by domain. Edit or delete. |
-| **Entities** | Every person, org, place, thing and process, ranked by how often they come up. Open one to get the file on them: standing details first, then the domains they span, who they're seen alongside, the questions they turn up in, and every observation mentioning them. |
+| **Entities** | Every person, org, place, thing and process, ranked by how often they come up. Open one to get the file on them: standing details, the domains they span, their recorded connections and who those reach in two hops, who they're seen alongside, the questions they turn up in, and every observation mentioning them. |
 | **Questions** | Standing questions, each holding the answer you build up over time. "How does a land lease work here" starts empty and grows into a written brief, with the observations that back it attached as evidence. |
 | **Brief** | The weekly payoff: what you filed, where you looked, who crossed domains, what's new, what's unanswered, what's unsourced. Copy it as text. |
 

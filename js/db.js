@@ -1,7 +1,7 @@
 // Thin promise wrapper over IndexedDB. Everything lives on the device.
 
 const DB_NAME = 'spy-work';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let handle = null;
 
@@ -22,6 +22,9 @@ export function open() {
       }
       if (!db.objectStoreNames.contains('questions')) {
         db.createObjectStore('questions', { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains('relations')) {
+        db.createObjectStore('relations', { keyPath: 'id' });
       }
       // Holds the single wrapped-master-key record. Never encrypted itself —
       // it is what makes decryption possible.

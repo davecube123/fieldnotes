@@ -37,9 +37,35 @@ export const CREDIBILITY = {
   6: 'Cannot be judged',
 };
 
-const STORES = ['observations', 'entities', 'questions'];
+const STORES = ['observations', 'entities', 'questions', 'relations'];
 
-export const state = { observations: [], entities: [], questions: [] };
+export const state = { observations: [], entities: [], questions: [], relations: [] };
+
+// Directed links between entities. Each type carries the phrase to use in each
+// direction, so one stored record reads correctly from either end.
+export const REL_TYPES = [
+  { id: 'owns',       forward: 'owns',              inverse: 'is owned by' },
+  { id: 'fronts_for', forward: 'fronts for',        inverse: 'is fronted by' },
+  { id: 'works_for',  forward: 'works for',         inverse: 'employs' },
+  { id: 'reports_to', forward: 'reports to',        inverse: 'has reporting to them' },
+  { id: 'member_of',  forward: 'is a member of',    inverse: 'counts as a member' },
+  { id: 'supplies',   forward: 'supplies',          inverse: 'is supplied by' },
+  { id: 'family',     forward: 'is family of',      inverse: 'is family of' },
+  { id: 'married',    forward: 'is married to',     inverse: 'is married to' },
+  { id: 'allied',     forward: 'is allied with',    inverse: 'is allied with' },
+  { id: 'opposed',    forward: 'is opposed to',     inverse: 'is opposed to' },
+  { id: 'linked',     forward: 'is connected to',   inverse: 'is connected to' },
+];
+
+// Who owns what is usually rumour before it is fact. Recording which is which
+// is the whole difference between a useful file and a rumour mill.
+export const CONFIDENCE = [
+  { id: 'confirmed', label: 'Confirmed', tone: 'good' },
+  { id: 'probable',  label: 'Probable',  tone: 'warn' },
+  { id: 'rumoured',  label: 'Rumoured',  tone: 'bad'  },
+];
+
+export const relType = id => REL_TYPES.find(t => t.id === id) || REL_TYPES[REL_TYPES.length - 1];
 
 // The master key exists only here, only in memory, only while unlocked.
 let masterKey = null;
@@ -72,7 +98,8 @@ async function readAll(store) {
 // Rewrites every record under the current key setting. Used when turning
 // encryption on or off; both directions are a full pass over the data.
 async function rewriteAll() {
-  const snapshot = { observations: state.observations, entities: state.entities, questions: state.questions };
+  // Snapshot from state by store name, so adding a store never silently drops it.
+  const snapshot = Object.fromEntries(STORES.map(store => [store, [...state[store]]]));
   for (const store of STORES) {
     await db.clear(store);
     for (const row of snapshot[store]) await persist(store, row);
@@ -128,10 +155,11 @@ export async function disableEncryption(passphrase) {
 /* ---------------- loading ---------------- */
 
 export async function load() {
-  const [observations, entities, questions] = await Promise.all(STORES.map(readAll));
+  const [observations, entities, questions, relations] = await Promise.all(STORES.map(readAll));
   state.observations = observations.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   state.entities = entities;
   state.questions = questions.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  state.relations = relations;
 }
 
 /* ---------------- entities ---------------- */
@@ -174,6 +202,8 @@ async function ensureEntities(names) {
   return ids;
 }
 
+export const ensureEntity = async name => (await ensureEntities([name]))[0];
+
 export async function saveEntity(entity) {
   entity.key = normKey(entity.name);
   entity.attributes = (entity.attributes || [])
@@ -214,6 +244,14 @@ export async function mergeEntities(sourceId, targetId) {
     await persist('questions', q);
   }
 
+  for (const r of [...state.relations]) {
+    if (r.fromId !== sourceId && r.toId !== sourceId) continue;
+    const moved = { ...r, fromId: r.fromId === sourceId ? targetId : r.fromId, toId: r.toId === sourceId ? targetId : r.toId };
+    // A link between the two entities being merged is now a link to itself.
+    if (moved.fromId === moved.toId) await deleteRelation(r.id);
+    else await saveRelation(moved);
+  }
+
   await db.del('entities', sourceId);
   state.entities = state.entities.filter(e => e.id !== sourceId);
   return target;
@@ -222,6 +260,7 @@ export async function mergeEntities(sourceId, targetId) {
 export async function deleteEntity(id) {
   await db.del('entities', id);
   state.entities = state.entities.filter(e => e.id !== id);
+  for (const r of state.relations.filter(r => r.fromId === id || r.toId === id)) await deleteRelation(r.id);
   for (const o of state.observations) {
     if (o.entityIds.includes(id)) {
       o.entityIds = o.entityIds.filter(x => x !== id);
@@ -301,6 +340,59 @@ export async function deleteQuestion(id) {
   state.questions = state.questions.filter(q => q.id !== id);
 }
 
+/* ---------------- relations ---------------- */
+
+export async function saveRelation(r) {
+  if (r.fromId === r.toId) throw new Error('An entity cannot be linked to itself.');
+  const now = new Date().toISOString();
+  const relation = {
+    id: r.id || uid(),
+    fromId: r.fromId,
+    toId: r.toId,
+    type: r.type || 'linked',
+    confidence: r.confidence || 'rumoured',
+    note: (r.note || '').trim(),
+    createdAt: r.createdAt || now,
+    updatedAt: now,
+  };
+  await persist('relations', relation);
+  const i = state.relations.findIndex(x => x.id === relation.id);
+  if (i >= 0) state.relations[i] = relation; else state.relations.push(relation);
+  return relation;
+}
+
+export async function deleteRelation(id) {
+  await db.del('relations', id);
+  state.relations = state.relations.filter(r => r.id !== id);
+}
+
+// Every link touching this entity, phrased from its point of view.
+export function relationsFor(entityId) {
+  return state.relations
+    .filter(r => r.fromId === entityId || r.toId === entityId)
+    .map(r => {
+      const outgoing = r.fromId === entityId;
+      const other = entityById(outgoing ? r.toId : r.fromId);
+      return { relation: r, other, label: outgoing ? relType(r.type).forward : relType(r.type).inverse };
+    })
+    .filter(x => x.other)
+    .sort((a, b) => a.other.name.localeCompare(b.other.name));
+}
+
+// One more hop out. This is where "who owns that place" turns into "and he also
+// sits on the board that grants the permits".
+export function secondDegree(entityId) {
+  const direct = new Set(relationsFor(entityId).map(x => x.other.id));
+  const out = [];
+  for (const near of relationsFor(entityId)) {
+    for (const far of relationsFor(near.other.id)) {
+      if (far.other.id === entityId || direct.has(far.other.id)) continue;
+      out.push({ via: near.other, label: far.label, other: far.other, confidence: far.relation.confidence });
+    }
+  }
+  return out;
+}
+
 /* ---------------- derived ---------------- */
 
 export function entityProfile(entityId) {
@@ -322,6 +414,8 @@ export function entityProfile(entityId) {
     entity: entityById(entityId),
     observations: obs,
     questions: state.questions.filter(q => (q.entityIds || []).includes(entityId)),
+    relations: relationsFor(entityId),
+    secondDegree: secondDegree(entityId),
     domains,
     crossDomain: domains.length >= 2,
     links,
@@ -393,6 +487,8 @@ export function brief(days = 7) {
     followUps: state.observations.filter(o => o.followUp),
     openQuestions: state.questions.filter(q => !q.answeredAt),
     answeredRecently: state.questions.filter(q => q.answeredAt && q.answeredAt >= since),
+    newRelations: state.relations.filter(r => r.createdAt >= since),
+    unconfirmedRelations: state.relations.filter(r => r.confidence === 'rumoured'),
     unsourced: recent.filter(o => !o.source).length,
   };
 }
@@ -427,6 +523,7 @@ export function exportPlain() {
     observations: state.observations,
     entities: state.entities,
     questions: state.questions,
+    relations: state.relations,
   };
 }
 
@@ -468,17 +565,20 @@ export async function importPayload(payload, { replace = false } = {}) {
 
   if (replace) {
     await Promise.all(STORES.map(s => db.clear(s)));
-    state.observations = []; state.entities = []; state.questions = [];
+    state.observations = []; state.entities = []; state.questions = []; state.relations = [];
   }
 
   const seenObs = new Set(state.observations.map(o => o.id));
   const seenEntityKeys = new Set(state.entities.map(e => e.key));
   const seenQuestions = new Set(state.questions.map(q => q.id));
 
+  const seenRelations = new Set(state.relations.map(r => r.id));
+
   const incoming = {
     entities: (payload.entities || []).filter(e => !seenEntityKeys.has(e.key)),
     observations: (payload.observations || []).filter(o => !seenObs.has(o.id)),
     questions: (payload.questions || []).filter(q => !seenQuestions.has(q.id)),
+    relations: (payload.relations || []).filter(r => !seenRelations.has(r.id)),
   };
 
   for (const store of STORES) {
