@@ -32,7 +32,16 @@ non-obvious, and relevant to a decision does. Three design consequences:
   an improbable claim, and collapsing the two into one "trust" score is how
   people end up certain about nothing.
 - **Entities are the spine.** Tag anything with `@[Maria Santos]` or `@BSP`.
-  Every mention links the observation to that entity.
+  Every mention links the observation to that entity. Typing `@` offers the
+  entities you already have, so hurried typing doesn't split one person into
+  three. Aliases catch the rest, and anything that still slips through can be
+  merged.
+- **Standing facts are not events.** A person's role, phone, plate or family sits
+  on their entity card as attributes. What they did last Tuesday is an
+  observation. Opening someone shows the first, then the second.
+- **Their words are not your words.** Mark an observation verbatim and it renders
+  as a quote, attributed to its source. A paraphrase you wrote three months ago
+  is not evidence of what somebody said.
 - **A connection is an entity crossing domains.** When the same name shows up in
   observations you filed under unrelated domains, the brief flags it. That is
   the honest, useful version of "subtle connections" — no inference magic, just
@@ -50,7 +59,7 @@ non-obvious, and relevant to a decision does. Three design consequences:
 |---|---|
 | **Capture** | File an observation in seconds. Domain, entities, optional grading. |
 | **Feed** | Everything filed, searchable, filterable by domain. Edit or delete. |
-| **Entities** | Every person, org, place, thing and process, ranked by how often they come up. Open one for its profile: domains it spans, who it's seen alongside, every observation mentioning it. |
+| **Entities** | Every person, org, place, thing and process, ranked by how often they come up. Open one to get the file on them: standing details first, then the domains they span, who they're seen alongside, the questions they turn up in, and every observation mentioning them. |
 | **Questions** | Standing questions, each holding the answer you build up over time. "How does a land lease work here" starts empty and grows into a written brief, with the observations that back it attached as evidence. |
 | **Brief** | The weekly payoff: what you filed, where you looked, who crossed domains, what's new, what's unanswered, what's unsourced. Copy it as text. |
 
@@ -142,7 +151,22 @@ js/ui.js              views and event wiring
 js/app.js             boot, service worker registration
 sw.js                 offline cache (bump CACHE when deploying changes)
 tools/make-icons.mjs  regenerates the PNG icons from the SVG motif
+tools/test/browser.mjs  end-to-end checks against a real browser
 ```
+
+## Tests
+
+The app itself has no dependencies. The tests need one:
+
+```sh
+python3 -m http.server 8099 &
+npm i playwright-core
+node tools/test/browser.mjs
+```
+
+They drive a real Chromium through capture, entity merging, question documents
+and the whole encryption path — including dumping raw IndexedDB to prove no
+plaintext survives encryption.
 
 ## Where this goes next
 

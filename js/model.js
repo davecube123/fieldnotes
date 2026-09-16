@@ -142,9 +142,10 @@ const MENTION = /@\[([^\]\n]+)\]|@([\p{L}\p{N}_.\-]+)/gu;
 export function parseMentions(text) {
   const names = [];
   for (const m of (text || '').matchAll(MENTION)) {
-    // Bare mentions allow inner dots and dashes (U.S., e-Gov) but must not swallow
-    // the punctuation that ends the sentence they sit in.
-    const name = (m[1] || m[2] || '').trim().replace(/[.\-_]+$/, '');
+    // Brackets are explicit delimiters, so @[Rosa D.] is taken literally. A bare
+    // mention has to guess where it ends, so it allows inner dots and dashes
+    // (U.S., e-Gov) but must not swallow the punctuation closing its sentence.
+    const name = m[1] !== undefined ? m[1].trim() : (m[2] || '').trim().replace(/[.\-_]+$/, '');
     if (name && !names.some(n => normKey(n) === normKey(name))) names.push(name);
   }
   return names;
@@ -175,10 +176,47 @@ async function ensureEntities(names) {
 
 export async function saveEntity(entity) {
   entity.key = normKey(entity.name);
+  entity.attributes = (entity.attributes || [])
+    .map(a => ({ k: (a.k || '').trim(), v: (a.v || '').trim() }))
+    .filter(a => a.k || a.v);
   await persist('entities', entity);
   const i = state.entities.findIndex(e => e.id === entity.id);
   if (i >= 0) state.entities[i] = entity; else state.entities.push(entity);
   return entity;
+}
+
+// Folds one entity into another: every link moves, the old name survives as an
+// alias so future mentions resolve, and attributes are kept unless they clash.
+export async function mergeEntities(sourceId, targetId) {
+  const source = entityById(sourceId);
+  const target = entityById(targetId);
+  if (!source || !target || sourceId === targetId) throw new Error('Pick two different entities.');
+
+  const targetKeys = new Set((target.attributes || []).map(a => a.k.toLowerCase()));
+  target.attributes = (target.attributes || [])
+    .concat((source.attributes || []).filter(a => !targetKeys.has(a.k.toLowerCase())));
+
+  target.aliases = [...new Set([...(target.aliases || []), ...(source.aliases || []), source.name]
+    .filter(a => normKey(a) !== normKey(target.name)))];
+
+  target.notes = [target.notes, source.notes].filter(Boolean).join('\n\n');
+  target.type = target.type !== 'unknown' ? target.type : source.type;
+  await saveEntity(target);
+
+  for (const o of state.observations) {
+    if (!o.entityIds.includes(sourceId)) continue;
+    o.entityIds = [...new Set(o.entityIds.map(id => (id === sourceId ? targetId : id)))];
+    await persist('observations', o);
+  }
+  for (const q of state.questions) {
+    if (!(q.entityIds || []).includes(sourceId)) continue;
+    q.entityIds = [...new Set(q.entityIds.map(id => (id === sourceId ? targetId : id)))];
+    await persist('questions', q);
+  }
+
+  await db.del('entities', sourceId);
+  state.entities = state.entities.filter(e => e.id !== sourceId);
+  return target;
 }
 
 export async function deleteEntity(id) {
@@ -211,6 +249,7 @@ export async function saveObservation(draft) {
     reliability: draft.reliability || 'F',
     credibility: draft.credibility || '6',
     followUp: !!draft.followUp,
+    verbatim: !!draft.verbatim,
     questionId: draft.questionId || null,
     entityIds,
   };
@@ -298,6 +337,15 @@ export function entityIndex() {
       return { entity: e, count: obs.length, domains, crossDomain: domains.length >= 2, lastSeen: obs[0] ? obs[0].createdAt : e.createdAt };
     })
     .sort((a, b) => b.count - a.count || b.lastSeen.localeCompare(a.lastSeen));
+}
+
+export function suggestEntities(query, limit = 6) {
+  const q = query.trim().toLowerCase();
+  return entityIndex()
+    .filter(r => !q || r.entity.name.toLowerCase().includes(q)
+              || (r.entity.aliases || []).some(a => a.toLowerCase().includes(q)))
+    .slice(0, limit)
+    .map(r => r.entity);
 }
 
 const localDay = iso => {

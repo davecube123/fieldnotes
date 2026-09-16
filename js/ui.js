@@ -16,7 +16,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 // syntax is for typing, not for reading it back.
 const MENTION_RE = /@\[([^\]\n]+)\]|@([\p{L}\p{N}_.\-]+)/gu;
 const withMentions = text => esc(text).replace(MENTION_RE, (_, bracketed, bare) => {
-  if (bracketed) return `<span class="mention">${bracketed}</span>`;
+  if (bracketed !== undefined) return `<span class="mention">${bracketed}</span>`;
   const trail = bare.match(/[.\-_]+$/)?.[0] || '';
   return `<span class="mention">${bare.slice(0, bare.length - trail.length)}</span>${trail}`;
 });
@@ -127,34 +127,40 @@ function renderLock({ recovery = false, error = '' } = {}) {
 /* ======================= capture ======================= */
 
 function renderCapture() {
-  const mentions = M.parseMentions(draft.body + ' ' + draft.assessment);
   const openQs = M.state.questions.filter(q => !q.answeredAt);
 
   view.innerHTML = `
     <form id="capture">
       <label class="field">
         <span class="lab">${draft.id ? 'Editing observation' : 'What did you observe?'}</span>
-        <textarea name="body" placeholder="Fact only — what was said, seen, posted, priced.&#10;Tag with @[Maria Santos] or @BSP.">${esc(draft.body)}</textarea>
+        <textarea name="body" placeholder="A vendor's name, what someone actually said, a detail about a person.&#10;Type @ to tag whoever it concerns.">${esc(draft.body)}</textarea>
       </label>
+      <div class="suggest" data-suggest-for="body"></div>
 
       <div class="chips scroll" id="domain-chips">
         ${M.DOMAINS.map(d => `<button type="button" class="chip ${draft.domain === d.id ? 'on' : ''}" data-domain="${d.id}">${d.label}</button>`).join('')}
       </div>
       <div class="spacer"></div>
 
-      ${mentions.length ? `<div class="chips">${mentions.map(n => `<span class="chip entity">@${esc(n)}</span>`).join('')}</div><div class="spacer"></div>` : ''}
+      <div class="chips" id="mention-chips"></div>
 
-      <details class="more" ${draft.assessment || draft.source || draft.followUp || draft.id ? 'open' : ''}>
+      <details class="more" ${draft.assessment || draft.source || draft.followUp || draft.verbatim || draft.id ? 'open' : ''}>
         <summary>Assessment, source, grading</summary>
 
         <label class="field">
           <span class="lab">Your assessment — kept separate from the fact above</span>
           <textarea name="assessment" placeholder="What you think it means. Label guesses as guesses.">${esc(draft.assessment)}</textarea>
         </label>
+        <div class="suggest" data-suggest-for="assessment"></div>
 
         <label class="field">
           <span class="lab">Source — who or what told you</span>
           <input type="text" name="source" value="${esc(draft.source)}" placeholder="Person, publication, firsthand">
+        </label>
+
+        <label class="field" style="display:flex;gap:10px;align-items:center">
+          <input type="checkbox" name="verbatim" ${draft.verbatim ? 'checked' : ''} style="width:auto">
+          <span class="small">Their exact words, not my summary</span>
         </label>
 
         <div class="row">
@@ -201,11 +207,21 @@ function renderCapture() {
     </p>`;
 
   const form = document.getElementById('capture');
+
   form.addEventListener('input', e => {
     const t = e.target;
     draft[t.name] = t.type === 'checkbox' ? t.checked : t.value;
-    if (t.name === 'body' || t.name === 'assessment') refreshMentionChips(mentions);
+    if (t.name === 'body' || t.name === 'assessment') updateMentionChips();
   });
+
+  for (const name of ['body', 'assessment']) {
+    attachMentionAutocomplete(
+      form.elements[name],
+      form.querySelector(`[data-suggest-for="${name}"]`),
+      () => { draft[name] = form.elements[name].value; updateMentionChips(); },
+    );
+  }
+  updateMentionChips();
 
   document.getElementById('domain-chips').addEventListener('click', e => {
     const btn = e.target.closest('[data-domain]');
@@ -229,17 +245,63 @@ function renderCapture() {
   });
 }
 
-// Cheap live feedback on which entities the text will create, without a full re-render
-// (which would steal focus from the textarea mid-sentence).
-function refreshMentionChips(previous) {
-  const now = M.parseMentions(draft.body + ' ' + draft.assessment);
-  if (now.length !== previous.length || now.some((n, i) => n !== previous[i])) {
-    const active = document.activeElement;
-    const pos = active && active.selectionStart;
-    renderCapture();
-    const again = document.querySelector(`#capture [name="${active?.name}"]`);
-    if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch {} }
-  }
+// Live list of who this observation will be filed against.
+function updateMentionChips() {
+  const el = document.getElementById('mention-chips');
+  if (!el) return;
+  const names = M.parseMentions(`${draft.body} ${draft.assessment}`);
+  el.innerHTML = names.map(n => {
+    const known = M.findEntityByName(n);
+    return `<span class="chip entity" ${known ? `data-entity="${known.id}"` : 'style="opacity:0.7"'}>${esc(n)}${known ? '' : ' · new'}</span>`;
+  }).join('');
+}
+
+// Typing @ offers the entities you already have. Picking one inserts the exact
+// stored name, which is what stops "Maria S." and "Maria Santos" becoming two
+// separate people over a few months of hurried typing.
+function attachMentionAutocomplete(textarea, suggestEl, onChange) {
+  if (!textarea || !suggestEl) return;
+
+  const openToken = () => {
+    const upto = textarea.value.slice(0, textarea.selectionStart);
+    const m = upto.match(/@\[([^\]\n]*)$/) || upto.match(/@([\p{L}\p{N}_.\-]*)$/u);
+    return m ? { query: m[1], start: upto.length - m[0].length } : null;
+  };
+
+  const close = () => { suggestEl.innerHTML = ''; };
+
+  const refresh = () => {
+    const token = openToken();
+    if (!token) return close();
+    const matches = M.suggestEntities(token.query);
+    if (!matches.length) {
+      suggestEl.innerHTML = token.query
+        ? `<span class="tiny muted">No match — finish typing to create “${esc(token.query)}”.</span>`
+        : '';
+      return;
+    }
+    suggestEl.innerHTML = matches
+      .map(e => `<button type="button" class="chip entity" data-pick="${e.id}">${esc(e.name)}</button>`).join('');
+  };
+
+  suggestEl.addEventListener('click', e => {
+    const btn = e.target.closest('[data-pick]');
+    if (!btn) return;
+    const token = openToken();
+    if (!token) return;
+    const entity = M.entityById(btn.dataset.pick);
+    const insert = `@[${entity.name}] `;
+    textarea.value = textarea.value.slice(0, token.start) + insert + textarea.value.slice(textarea.selectionStart);
+    const caret = token.start + insert.length;
+    textarea.focus();
+    textarea.setSelectionRange(caret, caret);
+    close();
+    onChange();
+  });
+
+  textarea.addEventListener('input', refresh);
+  textarea.addEventListener('click', refresh);
+  textarea.addEventListener('blur', () => setTimeout(close, 200));
 }
 
 /* ======================= feed ======================= */
@@ -299,12 +361,15 @@ function obsCard(o) {
         <span class="dom-${o.domain}">${M.DOMAINS.find(d => d.id === o.domain)?.label || o.domain}</span>
         <span>${esc(relTime(o.createdAt))}</span>
       </div>
-      <div class="body">${withMentions(o.body)}</div>
+      ${o.verbatim
+        ? `<blockquote class="body quote">${withMentions(o.body)}${o.source ? `<footer>— ${esc(o.source)}</footer>` : ''}</blockquote>`
+        : `<div class="body">${withMentions(o.body)}</div>`}
       ${o.assessment ? `<div class="assess"><span class="tag">ASSESSMENT</span>${withMentions(o.assessment)}</div>` : ''}
       <div class="obs-foot">
         ${chips}
         <span class="chip grade ${gradeClass(o)}">${esc(o.reliability)}${esc(o.credibility)}</span>
         ${o.source ? `<span class="chip">src: ${esc(o.source)}</span>` : '<span class="chip" style="color:var(--bad)">no source</span>'}
+        ${o.verbatim ? '<span class="chip" style="color:var(--good)">verbatim</span>' : ''}
         ${o.followUp ? '<span class="chip cross">follow up</span>' : ''}
         ${q ? `<span class="chip">Q: ${esc(q.text.slice(0, 32))}</span>` : ''}
       </div>
@@ -329,7 +394,7 @@ function renderEntities() {
         <span>
           <strong>${esc(r.entity.name)}</strong>
           ${r.crossDomain ? '<span class="chip cross" style="margin-left:6px">cross-domain</span>' : ''}
-          <div class="meta">${r.entity.type !== 'unknown' ? esc(r.entity.type) + ' · ' : ''}${r.domains.map(d => esc(d)).join(', ') || 'no observations'}</div>
+          <div class="meta">${r.entity.type !== 'unknown' ? esc(r.entity.type) + ' · ' : ''}${r.domains.map(d => esc(d)).join(', ') || 'no observations'}${(r.entity.attributes || []).length ? ` · ${r.entity.attributes.length} details` : ''}</div>
         </span>
         <span class="meta">${r.count}</span>
       </button>`).join('') : '<p class="empty">Entities appear here once you tag something with @.</p>'}`;
@@ -338,11 +403,24 @@ function renderEntities() {
   q.addEventListener('input', () => { entityQuery = q.value; renderEntities(); q.focus(); });
 }
 
+const attrRows = attrs => (attrs.length ? attrs : [{ k: '', v: '' }, { k: '', v: '' }])
+  .map(a => `<div class="row" style="margin-bottom:8px">
+    <input type="text" name="attr-k" value="${esc(a.k)}" placeholder="phone / role / plate" style="flex:2">
+    <input type="text" name="attr-v" value="${esc(a.v)}" placeholder="detail" style="flex:3">
+  </div>`).join('');
+
 export function openEntity(id) {
   const p = M.entityProfile(id);
   if (!p.entity) return;
 
+  const attrs = (p.entity.attributes || []).filter(a => a.k || a.v);
+
   openSheet(p.entity.name, `
+    ${attrs.length ? `<dl class="attrs">${attrs.map(a => `<div><dt>${esc(a.k)}</dt><dd>${esc(a.v)}</dd></div>`).join('')}</dl><div class="spacer"></div>` : ''}
+    ${p.entity.notes ? `<p class="small">${withMentions(p.entity.notes)}</p><div class="spacer"></div>` : ''}
+
+    <details class="more">
+      <summary>Edit details</summary>
     <form id="ent-form">
       <label class="field"><span class="lab">Name</span>
         <input type="text" name="name" value="${esc(p.entity.name)}"></label>
@@ -354,14 +432,36 @@ export function openEntity(id) {
       </div>
       <label class="field"><span class="lab">Standing notes</span>
         <textarea name="notes" style="min-height:70px">${esc(p.entity.notes || '')}</textarea></label>
+
+      <h2>What you have on ${esc(p.entity.name)}</h2>
+      <p class="tiny muted" style="margin-bottom:8px">Standing facts — role, employer, phone, plate, who they are related to. Things that stay true, as opposed to things that happened.</p>
+      <div id="attr-rows">${attrRows(p.entity.attributes || [])}</div>
+      <button class="ghost" type="button" id="attr-add" style="width:100%">Add a detail</button>
+
+      <div class="spacer"></div>
       <div class="row">
         <button class="primary" type="submit">Save</button>
         <button class="ghost" type="button" id="ent-del">Delete</button>
       </div>
     </form>
 
+    ${M.state.entities.length > 1 ? `
+    <div class="spacer"></div>
+    <form id="ent-merge" class="card">
+      <h3>Same as another entry?</h3>
+      <p class="tiny muted">Everything moves across and this name is kept as an alias, so old tags keep resolving.</p>
+      <label class="field"><span class="lab">Fold ${esc(p.entity.name)} into</span>
+        <select name="target">
+          <option value="">—</option>
+          ${M.state.entities.filter(e => e.id !== p.entity.id).map(e => `<option value="${e.id}">${esc(e.name)}</option>`).join('')}
+        </select></label>
+      <button class="ghost" type="submit" style="width:100%">Merge</button>
+    </form>` : ''}
+    </details>
+
     <div class="spacer"></div>
     <h2>Appears in</h2>
+    <!-- domains -->
     <div class="chips">${p.domains.length ? p.domains.map(d => `<span class="chip dom-${d}">${esc(d)}</span>`).join('') : '<span class="muted small">nothing yet</span>'}</div>
     ${p.crossDomain ? '<p class="tiny" style="color:var(--warn);margin-top:8px">Crosses domains — the joins are where the non-obvious sits.</p>' : ''}
 
@@ -379,19 +479,40 @@ export function openEntity(id) {
     <h2>${p.observations.length} observations</h2>
     ${p.observations.map(obsCard).join('') || '<p class="muted small">None.</p>'}`);
 
+  document.getElementById('attr-add').addEventListener('click', () => {
+    document.getElementById('attr-rows').insertAdjacentHTML('beforeend', attrRows([{ k: '', v: '' }]));
+  });
+
   document.getElementById('ent-form').addEventListener('submit', async e => {
     e.preventDefault();
     const f = new FormData(e.target);
+    const keys = f.getAll('attr-k');
+    const values = f.getAll('attr-v');
     await M.saveEntity({
       ...p.entity,
       name: f.get('name').trim() || p.entity.name,
       type: f.get('type'),
       aliases: f.get('aliases').split(',').map(s => s.trim()).filter(Boolean),
       notes: f.get('notes'),
+      attributes: keys.map((k, i) => ({ k, v: values[i] || '' })),
     });
     closeSheet();
     render();
-    toast('Entity saved.');
+    toast('Saved.');
+  });
+
+  const mergeForm = document.getElementById('ent-merge');
+  if (mergeForm) mergeForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    const targetId = new FormData(e.target).get('target');
+    if (!targetId) return;
+    const target = M.entityById(targetId);
+    if (!confirm(`Fold "${p.entity.name}" into "${target.name}"? This cannot be undone.`)) return;
+    await M.mergeEntities(p.entity.id, targetId);
+    closeSheet();
+    render();
+    openEntity(targetId);
+    toast('Merged.');
   });
 
   document.getElementById('ent-del').addEventListener('click', async () => {
@@ -457,7 +578,8 @@ export function openQuestion(id) {
         <input type="text" name="text" value="${esc(q.text)}"></label>
 
       <label class="field"><span class="lab">What you have worked out so far</span>
-        <textarea name="answer" style="min-height:190px" placeholder="Write it up as you learn it — the steps, who decides what, what it costs, where it stalls.&#10;&#10;Tag the people and offices involved with @[Registry of Deeds].">${esc(q.answer || '')}</textarea></label>
+        <textarea name="answer" style="min-height:190px" placeholder="Write it up as you learn it — the steps, who decides what, what it costs, where it stalls.&#10;&#10;Type @ to tag the people and offices involved.">${esc(q.answer || '')}</textarea></label>
+      <div class="suggest" data-suggest-for="answer"></div>
 
       ${entities.length ? `<div class="chips" style="margin-bottom:12px">${entities.map(e => `<button type="button" class="chip entity" data-entity="${e.id}">${esc(e.name)}</button>`).join('')}</div>` : ''}
 
@@ -475,7 +597,10 @@ export function openQuestion(id) {
     <div class="spacer"></div>
     ${linked.map(obsCard).join('') || '<p class="muted small">Nothing linked yet.</p>'}`);
 
-  document.getElementById('q-edit').addEventListener('submit', async e => {
+  const qForm = document.getElementById('q-edit');
+  attachMentionAutocomplete(qForm.elements.answer, qForm.querySelector('[data-suggest-for="answer"]'), () => {});
+
+  qForm.addEventListener('submit', async e => {
     e.preventDefault();
     const f = new FormData(e.target);
     await M.saveQuestion({ ...q, text: f.get('text'), answer: f.get('answer') });

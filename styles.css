@@ -297,3 +297,22 @@ details.more[open] > summary::before { content: "▾ "; }
 /* Locked: nothing to navigate to until the file is open. */
 body.locked .tabbar { display: none; }
 body.locked #btn-data { display: none; }
+
+/* @-mention suggestions under a capture field */
+.suggest { display: flex; flex-wrap: wrap; gap: 6px; margin: -6px 0 12px; }
+
+/* Someone's actual words, kept visibly distinct from your paraphrase. */
+blockquote.quote {
+  margin: 0;
+  padding: 10px 14px;
+  border-left: 3px solid var(--good);
+  background: var(--surface-2);
+  border-radius: 0 8px 8px 0;
+  font-style: italic;
+}
+blockquote.quote footer { margin-top: 8px; font-style: normal; font-size: 12px; color: var(--muted); }
+
+dl.attrs { margin: 0; }
+dl.attrs > div { display: flex; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+dl.attrs dt { flex: 0 0 38%; color: var(--muted); font-size: 13px; }
+dl.attrs dd { margin: 0; flex: 1; overflow-wrap: anywhere; }
